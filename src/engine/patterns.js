@@ -1,3 +1,5 @@
+const { createPersonFieldDetector } = require('./person-fields');
+
 const NAME_STOPLIST = new Set([
   'the', 'of', 'in', 'for', 'a', 'an', 'and', 'or', 'to', 'from', 'with',
   'by', 'at', 'on', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
@@ -94,6 +96,14 @@ const COMMON_EN = new Set([
   'guardian', 'engine', 'module', 'library', 'package', 'release', 'changelog',
   'ordinary', 'english', 'arabic', 'visa', 'passport', 'licence', 'license',
   'national', 'unified', 'bank', 'card', 'credit', 'number', 'numbers',
+  // Form and HR column headers. `Full Name`, `Place Of Birth` and `Passport
+  // Expiry` label a column of people; they are not people themselves.
+  'full', 'given', 'middle', 'surname', 'forename', 'maiden', 'legal', 'holder',
+  'cardholder', 'beneficiary', 'applicant', 'passenger', 'nationality', 'gender',
+  'birth', 'place', 'expiry', 'issue', 'issued', 'marital', 'religion',
+  'occupation', 'employer', 'designation', 'salary', 'joining', 'relationship',
+  'emergency', 'residence', 'residency', 'emirate', 'sponsor', 'remarks',
+  'comments', 'signature',
 ]);
 
 /**
@@ -144,6 +154,88 @@ const NAME_CUE_RX = new RegExp(
 /** Arabic particles that are strong positive evidence of a personal name. */
 const AR_NAME_PARTICLES = new Set(['بن', 'بنت', 'ابن', 'آل', 'ال', 'عبد', 'أبو', 'ابو', 'أم', 'ام']);
 
+// ---------------------------------------------------------------------------
+// Places and organisations that look like names.
+//
+// `Abu Dhabi`, `Ras Al Khaimah`, `Sultan Bin Zayed Street`, `Gulf Logistics`
+// and `Visual Studio Code` are capitalised word runs, and most contain at least
+// one word that is not ordinary vocabulary, so the stop-list keeps them as
+// "names". Masking them costs the requesting agent context it needs, and in the
+// Guardian a restricted class it did not need to transform.
+//
+// The suffix list leaves out words that are also common surnames (Park, Hall,
+// King, Bay, Church), so `Grace Park` is still a person.
+// ---------------------------------------------------------------------------
+
+/** Last word of a Latin-script run that marks a place or an organisation. */
+const EN_PLACE_ORG_SUFFIX = new Set([
+  'street', 'st', 'road', 'rd', 'avenue', 'ave', 'boulevard', 'blvd', 'highway',
+  'hwy', 'lane', 'square', 'plaza', 'city', 'district', 'emirate', 'island',
+  'airport', 'mall', 'tower', 'towers', 'centre', 'center', 'mosque', 'masjid',
+  'university', 'college', 'school', 'academy', 'institute', 'hospital',
+  'clinic', 'hotel', 'resort', 'stadium', 'museum', 'library', 'souk',
+  'station', 'terminal', 'marina', 'bank', 'group', 'holding', 'holdings',
+  'llc', 'fze', 'fzco', 'fzllc', 'pjsc', 'psc', 'ltd', 'limited', 'inc', 'corp',
+  'corporation', 'company', 'gmbh', 'plc', 'authority', 'ministry', 'council',
+  'municipality', 'court', 'foundation', 'association', 'club', 'trading',
+  'logistics', 'technologies', 'technology', 'solutions', 'services', 'systems',
+  'consulting', 'consultancy', 'partners', 'enterprises', 'industries',
+  'investments', 'properties', 'cloud', 'studio', 'code', 'platform', 'support',
+  'report', 'plan', 'airways', 'airlines', 'telecom', 'media', 'news',
+  'department', 'dept', 'division', 'team', 'office', 'committee', 'board',
+  'directorate', 'sector', 'unit',
+]);
+
+/** Multi-word place names, lower case. Matched as a whole-word run inside a match. */
+const EN_KNOWN_PLACES = [
+  'abu dhabi', 'al ain', 'ras al khaimah', 'umm al quwain', 'al dhafra', 'al reem',
+  'al barsha', 'al quoz', 'al nahda', 'al qusais', 'al karama', 'al mamzar',
+  'jumeirah lake towers', 'business bay', 'downtown dubai', 'palm jumeirah',
+  'dubai silicon oasis', 'saudi arabia', 'united arab emirates', 'united states',
+  'united kingdom', 'new york', 'new jersey', 'new delhi', 'new zealand',
+  'san francisco', 'los angeles', 'las vegas', 'san diego', 'san jose',
+  'hong kong', 'sri lanka', 'south africa', 'north america', 'south america',
+  'costa rica', 'el salvador', 'puerto rico', 'rio de janeiro', 'buenos aires',
+  'kuala lumpur', 'cape town', 'saint petersburg', 'tel aviv',
+].map((p) => p.split(' '));
+
+/** First word of an Arabic run that marks a place or an organisation. */
+const AR_PLACE_ORG_PREFIX = new Set([
+  'شارع', 'طريق', 'مدينة', 'منطقة', 'حي', 'جزيرة', 'إمارة', 'امارة', 'مطار',
+  'ميناء', 'مركز', 'مول', 'برج', 'مسجد', 'جامع', 'جامعة', 'كلية', 'مدرسة', 'معهد',
+  'أكاديمية', 'اكاديمية', 'مستشفى', 'عيادة', 'فندق', 'بنك', 'مصرف', 'شركة',
+  'مؤسسة', 'مجموعة', 'وزارة', 'هيئة', 'دائرة', 'مجلس', 'بلدية', 'محكمة', 'محاكم',
+  'نادي', 'ملعب', 'متحف', 'مكتبة', 'سوق', 'محطة', 'حديقة', 'منتزه', 'قسم',
+  'إدارة', 'ادارة', 'فرع', 'مشروع',
+]);
+
+/** Whole Arabic runs that are places. Compared exactly: Arabic runs are long. */
+const AR_KNOWN_PLACES = new Set([
+  'أبو ظبي', 'ابو ظبي', 'رأس الخيمة', 'راس الخيمة', 'أم القيوين', 'ام القيوين',
+  'الإمارات العربية المتحدة', 'الامارات العربية المتحدة', 'المملكة العربية السعودية',
+  'المملكة المتحدة', 'الولايات المتحدة', 'الولايات المتحدة الأمريكية',
+]);
+
+/**
+ * Is this run of words a place or an organisation rather than a person?
+ * @param {string[]} tokens
+ */
+function isOrgOrPlace(tokens) {
+  const words = tokens.map((w) => w.replace(/[.,'’]+$/g, '')).filter(Boolean);
+  if (words.length === 0) return false;
+  if (/[؀-ۿ]/.test(words[0])) {
+    return AR_PLACE_ORG_PREFIX.has(words[0]) || AR_KNOWN_PLACES.has(words.join(' '));
+  }
+  const lower = words.map((w) => w.toLowerCase());
+  if (EN_PLACE_ORG_SUFFIX.has(lower[lower.length - 1])) return true;
+  return EN_KNOWN_PLACES.some((place) => {
+    for (let i = 0; i + place.length <= lower.length; i++) {
+      if (place.every((w, k) => lower[i + k] === w)) return true;
+    }
+    return false;
+  });
+}
+
 /**
  * Shared gate for both name patterns.
  * @param {string[]} tokens - the match split into words
@@ -152,6 +244,10 @@ const AR_NAME_PARTICLES = new Set(['بن', 'بنت', 'ابن', 'آل', 'ال', '
  * @param {number} idx - offset of the match
  */
 function looksLikeName(tokens, common, text, idx) {
+  // A place or an organisation is never a person, even after a cue:
+  // `Owner: Gulf Logistics LLC` names a company.
+  if (isOrgOrPlace(tokens)) return false;
+
   // An explicit cue immediately before the match settles it, and outranks
   // everything below -- `Name: Mark Price` is a name however ordinary the words.
   const before = text.slice(Math.max(0, idx - 24), idx);
@@ -325,6 +421,8 @@ const BASE_PATTERNS = [
     rx: /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]+(?:[ \t]+[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]+)+/g,
     validate: (match, text, idx) => {
       const tokens = match.split(/\s+/);
+      // The particle shortcut must not rescue a place: أبو ظبي starts with أبو.
+      if (isOrgOrPlace(tokens)) return false;
       if (tokens.some((w) => AR_NAME_PARTICLES.has(w))) return true;
       return looksLikeName(tokens, COMMON_AR, text, idx);
     },
@@ -446,6 +544,11 @@ const BASE_PATTERNS = [
     // before the match overrides that. See looksLikeName() for why the rule is
     // asymmetric.
     validate: (match, text, idx) => looksLikeName(match.split(/\s+/), COMMON_EN, text, idx),
+    // Names found by the field they sit in rather than by their shape: a
+    // `full_name` column, a `"customer"` JSON key, a `Name:` line. Catches
+    // capitals, lower case, single names and Arabic values the regex cannot.
+    // See person-fields.js.
+    detect: createPersonFieldDetector({ commonEn: COMMON_EN, commonAr: COMMON_AR, isOrgOrPlace }),
     fakeValues: ['John Smith', 'Jane Doe'],
   },
   // ---- Credentials ---------------------------------------------------------
@@ -662,6 +765,7 @@ module.exports = {
   AR_NAME_PARTICLES,
   NAME_CUE_RX,
   looksLikeName,
+  isOrgOrPlace,
   // Checksum helpers — used by the reporter (A2) and PDPL mapping (A5) to
   // badge findings as "checksum-verified" without breaking pattern lenience.
   luhnCheck,

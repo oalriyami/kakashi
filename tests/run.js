@@ -17,6 +17,7 @@ const { runOrchestratorTests } = require('./orchestrator.test');
 const { runGuardianNarrativeTests } = require('./guardian-narrative.test');
 const { runGuardFallbackTests } = require('./guard-fallback.test');
 const { runImpactTests } = require('./impact.test');
+const { runNameTests } = require('./names.test');
 
 (async () => {
   let ok = true;
@@ -40,6 +41,7 @@ const { runImpactTests } = require('./impact.test');
   ok = (await runGuardianNarrativeTests()) && ok;
   ok = (await runGuardFallbackTests()) && ok;
   ok = runImpactTests() && ok;
+  ok = (await runNameTests()) && ok;
 
   console.log(ok ? '\nAll tests passed.' : '\nSome tests failed.');
   process.exit(ok ? 0 : 1);

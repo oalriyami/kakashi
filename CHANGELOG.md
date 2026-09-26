@@ -6,6 +6,49 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+**Name detection, phase 1: read the structure first.** Names were found only
+when written in Title Case (Latin) or as any run of Arabic words, so names in
+capitals, lower case or on their own were missed, while places, products and
+headings were masked. On a new benchmark of 16 names in 7 contexts, recall
+goes from 54/112 to 108/112 and false alarms on 27 person-free texts from 19
+to 3.
+
+### Added
+
+- **Person fields** ([src/engine/person-fields.js](src/engine/person-fields.js)).
+  A value under a person-like key is a name whatever its case, script or
+  length: JSON / JS / Python keys (`"full_name": "…"`), label and YAML lines
+  (`Name: …`), assignments (`customerName = "…"`), and header columns in CSV,
+  TSV, Markdown tables and spreadsheets. Strong keys (`full_name`,
+  `surname`, `employee_name`, `الاسم الكامل`) accept any name-shaped value;
+  weak keys (`name`, `owner`, `الاسم`) need a value that looks like a person on
+  its own, unless most of that key's values do. Thing keys (`company_name`,
+  `file_name`, `host_name`) are ignored. Findings use the `full_name` id and
+  `[FULL_NAME_n]` tokens, so the Guardian's classes are unchanged.
+- **Name benchmark in CI** ([tests/names.test.js](tests/names.test.js)).
+  Recall and false alarms are asserted against floors that may only rise.
+
+### Changed
+
+- **Spreadsheets are read one row per line**, cells joined by ` | `, so the
+  header row labels each column. No pattern can match across the separator,
+  so every finding stays inside one cell.
+- **Places and organisations are no longer names**: `Abu Dhabi`,
+  `Sultan Bin Zayed Street`, `Gulf Logistics LLC`, `Visual Studio Code`,
+  `Finance Department`, `شارع …`, `أبو ظبي`. The veto outranks a name cue.
+- **Form headers are no longer names**: `Full Name`, `Place Of Birth`,
+  `Residence Visa`.
+
+### Fixed
+
+- **Masking a short name no longer corrupts longer words.** The xlsx, docx and
+  pptx writers replaced every masked value as a plain substring, so masking
+  `Ali` would have rewritten `Alignment`. Name-like values are now replaced as
+  whole words; values containing digits or symbols (secrets) keep substring
+  replacement.
+
 ## [1.3.1] — 2026-09-23
 
 **Bug-fix release.** Closes the "`Unrecognized command '/Kakashi'`" gap on

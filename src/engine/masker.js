@@ -63,6 +63,25 @@ function maskText(text, options = {}) {
   const matches = [];
 
   for (const pattern of activePatterns) {
+    // A pattern may also find spans structurally rather than by regex --
+    // `full_name` reads the field a value sits in. Its spans compete in the
+    // same overlap resolution below as any regex match.
+    if (typeof pattern.detect === 'function') {
+      for (const span of pattern.detect(text)) {
+        if (whitelistSet.has(span.original)) continue;
+        matches.push({
+          id: pattern.id,
+          label: pattern.label,
+          labelAr: pattern.labelAr,
+          cat: pattern.cat,
+          original: span.original,
+          start: span.start,
+          end: span.end,
+          fakeValues: pattern.fakeValues,
+        });
+      }
+    }
+
     // `d` (hasIndices) exposes each capture group's absolute offset, which is
     // how a pattern can match a wide context but replace only part of it.
     const flags = pattern.valueGroups && !pattern.rx.flags.includes('d')

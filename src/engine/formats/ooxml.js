@@ -32,6 +32,8 @@
  * `&` is matched as `&` rather than as `&amp;`.
  */
 
+const { occurrences } = require('./replace');
+
 const ENTITIES = [
   [/&amp;/g, '&'],
   [/&lt;/g, '<'],
@@ -138,14 +140,11 @@ function findSpans(text, orderedKeys, replMap) {
   const spans = [];
   for (const key of orderedKeys) {
     if (!key) continue;
-    let from = 0;
-    for (;;) {
-      const at = text.indexOf(key, from);
-      if (at === -1) break;
+    // Whole words only for name-like values (see ./replace.js).
+    for (const at of occurrences(text, key)) {
       const end = at + key.length;
       const clashes = spans.some((s) => at < s.end && end > s.start);
       if (!clashes) spans.push({ start: at, end, replacement: replMap[key] });
-      from = at + key.length;
     }
   }
   return spans.sort((a, b) => a.start - b.start);
