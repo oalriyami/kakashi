@@ -1,4 +1,5 @@
 const { PATTERNS } = require('./patterns');
+const { fakeValue } = require('./fakes');
 
 function lineAtOffset(text, offset) {
   let line = 1;
@@ -18,9 +19,11 @@ function getReplacement(match, mode, valueMap, counters) {
   if (mode === 'redact') {
     replacement = '[REDACTED]';
   } else if (mode === 'fake') {
-    const fakes = match.fakeValues || [`fake_${key}`];
+    // One distinct fake per distinct original (see fakes.js). Cycling the
+    // pattern's short fakeValues list gave the third person the first
+    // person's fake.
     counters[key] = (counters[key] || 0) + 1;
-    replacement = fakes[(counters[key] - 1) % fakes.length];
+    replacement = fakeValue(key, counters[key], match.fakeValues);
   } else {
     counters[key] = (counters[key] || 0) + 1;
     replacement = `[${key.toUpperCase()}_${counters[key]}]`;

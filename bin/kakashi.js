@@ -233,10 +233,15 @@ program
     console.log(chalk.cyan(`\n${BRAND} -- batch mask`));
     console.log(chalk.gray(`   ${files.length} file(s) in ${directory}\n`));
     let totalFindings = 0;
+    // One token map for the whole run, as db-mask shares one across rows: the
+    // same value gets the same token in every file, and different values never
+    // share one. Per-file maps made `[EMAIL_1]` a different person in each file.
+    const valueMap = {};
+    const counters = {};
     for (const file of files) {
       try {
         const data = await formats.readFile(file);
-        const { masked, findings } = maskText(data.text, { mode: options.mode || 'typed' });
+        const { masked, findings } = maskText(data.text, { mode: options.mode || 'typed', valueMap, counters });
         if (findings.length === 0) continue;
         const outputPath = formats.defaultOutputPath(file);
         const replMap = {};

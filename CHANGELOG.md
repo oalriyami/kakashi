@@ -109,6 +109,18 @@ to 3.
   case-sensitive and needs a digit (`cn-north-1` was a licence). `email`
   rejects file names such as `logo@2x.png` (only extensions that are not real
   TLDs). `intl_phone` no longer starts inside a longer number.
+- **`mask-dir` tokens are consistent across files** (#14). Each file used to
+  start its own token map, so `[EMAIL_1]` was a different person in every
+  file of one run. One map is now shared across the run, as `db-mask` shares
+  one across rows: the same value gets the same token (or fake) in every file.
+- **Fake mode gives every distinct original its own fake** (#15). It cycled
+  through each pattern's one or two `fakeValues`, so the third email became
+  the first email's fake. The listed fakes are still used first; after that
+  each pattern generates distinct, deterministic values in its own format
+  (`src/engine/fakes.js`). Where the format allows, generated values can never
+  be live: Emirates IDs with a wrong check digit, cards in the 411111 test
+  range, IBANs on nonexistent banks, SSNs in the never-issued group 00, IPs in
+  10.0.0.0/8 and emails on example.com.
 - **Masking is linear in file size** (#13). `maskText()` recounted lines from
   the start of the text for every finding and rebuilt the whole string for
   every replacement, so 8,000 JSON lines took ~6 s with one pattern and a
