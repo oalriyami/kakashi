@@ -302,6 +302,33 @@ function splitSecretAssignment(match) {
   };
 }
 
+/**
+ * Key segments that describe a property of a secret rather than hold it:
+ * `max_tokens`, `token_type`, `PASSWORD_MIN_LENGTH`, `TOKEN_TTL`, `SECRET_FILE`.
+ */
+const SECRET_PROPERTY_SEGMENTS = new Set([
+  'max', 'min', 'num', 'len', 'length', 'type', 'kind', 'format', 'expiry', 'expires',
+  'expiration', 'ttl', 'timeout', 'lifetime', 'age', 'count', 'limit', 'limits',
+  'size', 'port', 'policy', 'rotation', 'strength', 'regex', 'pattern', 'hint',
+  'header', 'prefix', 'enabled', 'required', 'file', 'path', 'dir', 'name', 'version',
+]);
+
+/** @param {string} key */
+function describesSecretProperty(key) {
+  const segments = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  return segments.some((seg) => SECRET_PROPERTY_SEGMENTS.has(seg));
+}
+
+/** Values that stand in for a secret: references, templates, truncations. */
+const SECRET_PLACEHOLDER_RX = /^(?:\$\{|\$\(|\{\{|%\(|<[^>]*>?$|\$[A-Za-z_]\w*$|process\.env\b|os\.environ\b|env\(|x{3,}$|\*{3,}$)|\.\.\.|…|^(?:change[_-]?me|replace[_-]?me|your[_-]\S*|todo|redacted|placeholder|dummy)$/i;
+
+/** Loopback and local-only hosts. */
+const LOCAL_HOST_RX = /^(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[::1\]|host\.docker\.internal)(?::\d+)?$/i;
+
 /** Words that, just before a hex string on the same line, say it is a hash. */
 const HASH_CUE_RX = /\b(?:commits?|sha-?(?:1|256|384|512)?(?:sum)?|checksums?|digests?|integrity|hash(?:es)?|revision|rev|merged?|cherry[- ]?pick(?:ed)?|blob|tree|parent|fix(?:es|ed)?|refs?|tags?|objects?)\b[^\n]{0,24}$/i;
 
@@ -336,6 +363,37 @@ function looksLikeHashReference(match, text, idx) {
   if (/^[\s>*+-]*$/.test(before) && /^[ \t]+\S/.test(after) && !HEX_SECRET_CUE_RX.test(after)) return true;
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// Context helpers for passport, date and email
+// ---------------------------------------------------------------------------
+
+/** Up to `max` characters of the current line before `idx`. */
+function linePrefix(text, idx, max) {
+  const lineStart = text.lastIndexOf('\n', idx - 1) + 1;
+  return text.slice(Math.max(lineStart, idx - max), idx);
+}
+
+/** A label that says the next value is a passport number. */
+const PASSPORT_CUE_RX = /(?:passport|travel[ \t_-]*doc|document[ \t_-]*(?:no|number|#)|جواز)/i;
+
+/** A label that says the next code is a business document, not a passport. */
+const DOCUMENT_CODE_CUE_RX = /\b(?:invoice|inv|order|ref|reference|sku|po|ticket|case|build|version|serial|part|model|item|product|tracking|booking|confirmation|receipt|quote|contract)\b[^\n]{0,12}$|(?:فاتورة|طلب|مرجع)[^\n]{0,12}$/i;
+
+/** Eight digits that read as a calendar date (19xx/20xx, month 01-12, day 01-31). */
+function looksLikeYyyymmdd(digits) {
+  const m = /^(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/.exec(digits);
+  return Boolean(m);
+}
+
+/** A cue that the next date is a person's date of birth. */
+const BIRTH_CUE_RX = /(?:\bdob\b|d\.o\.b|birth|born|ميلاد|مواليد)/i;
+
+/** A cue that the next date belongs to a business document. */
+const DOCUMENT_DATE_CUE_RX = /\b(?:invoice|inv|due|order(?:ed)?|payment|paid|delivery|delivered|shipped|created|updated|modified|generated|printed|report(?:ed|ing)?|as of|period|effective|posted|published|released?|version|build|deadline|meeting|scheduled|statement|billing)\b[^\n]{0,16}$|(?:فاتورة|الاستحقاق|الطلب|الدفع|التقرير)[^\n]{0,16}$/i;
+
+/** An email-shaped string whose "domain" ends in a file extension. */
+const FILE_EXTENSION_TLD_RX = /\.(?:png|jpe?g|gif|svg|webp|ico|bmp|tiff?|m?js|cjs|tsx?|jsx|s?css|json|ya?ml|xml|html?|pdf|txt|csv|map|woff2?|ttf|eot|mp[34]|wav|avi)$/i;
 
 // ---------------------------------------------------------------------------
 // Identifier helpers: card prefixes, Emirates ID labels, IBAN detection
@@ -522,7 +580,9 @@ const BASE_PATTERNS = [
     cat: 'id',
     // Matches UAE mobile (+971 5x…) and UAE landline (+971 2/3/4/6/7/9) in
     // international, national-with-country-code (00971), or local (0X) forms.
-    rx: /(?:\+971|00971|971)[ \t.-]?(?:5[0-9]|2|3|4|6|7|9)[ \t.-]?\d{3}[ \t.-]?\d{4}\b|\b0(?:5[0-9]|2|3|4|6|7|9)[ \t.-]?\d{3}[ \t.-]?\d{4}\b/g,
+    // The international form must not start inside a longer number
+    // (`SKU 8971501234567`); the national form has its own `\b`.
+    rx: /(?<![\d+])(?:\+971|00971|971)[ \t.-]?(?:5[0-9]|2|3|4|6|7|9)[ \t.-]?\d{3}[ \t.-]?\d{4}\b|\b0(?:5[0-9]|2|3|4|6|7|9)[ \t.-]?\d{3}[ \t.-]?\d{4}\b/g,
     fakeValues: ['+971501234567', '0501234567'],
   },
   {
@@ -533,6 +593,15 @@ const BASE_PATTERNS = [
     // ICAO-style passport numbers: 2 letters + 6-9 digits, or P<letter> + 7-8 digits.
     // Covers UAE, most EU, US, and Commonwealth passport formats.
     rx: /\b(?:[A-Z]{2}\d{6,9}|P[A-Z]\d{7,8})\b/g,
+    // Two capitals and digits is also how invoice, order and ticket codes look
+    // (`Invoice IN20240115`). A label naming something else, or digits that
+    // read as a YYYYMMDD date, rule it out -- unless a passport label is there.
+    validate: (match, text, idx) => {
+      const before = linePrefix(text, idx, 40);
+      if (PASSPORT_CUE_RX.test(before)) return true;
+      if (DOCUMENT_CODE_CUE_RX.test(before)) return false;
+      return !looksLikeYyyymmdd(match.replace(/\D/g, ''));
+    },
     fakeValues: ['MO1234567', 'AB12345678'],
   },
   {
@@ -550,7 +619,9 @@ const BASE_PATTERNS = [
     labelAr: 'رخصة تجارية',
     cat: 'id',
     // Dubai DED / commercial CN / TL-prefixed trade license numbers.
-    rx: /\b(?:DED|CN|TL)-[A-Z0-9]{4,10}\b/gi,
+    // Case-sensitive, with at least one digit: `cn-north-1` (an AWS region)
+    // matched the old case-insensitive form.
+    rx: /\b(?:DED|CN|TL)-(?=[A-Z0-9]*\d)[A-Z0-9]{4,10}\b/g,
     fakeValues: ['DED-123456', 'CN-789012'],
   },
   {
@@ -622,6 +693,9 @@ const BASE_PATTERNS = [
     labelAr: 'بريد إلكتروني',
     cat: 'pii',
     rx: /\b[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}\b/g,
+    // `logo@2x.png` is a file name. Only extensions that are not also real
+    // top-level domains are rejected (`.md`, `.zip`, `.mov` are TLDs).
+    validate: (match) => !FILE_EXTENSION_TLD_RX.test(match),
     fakeValues: ['user_a@example.com', 'user_b@example.org'],
   },
   {
@@ -696,6 +770,14 @@ const BASE_PATTERNS = [
     labelAr: 'تاريخ',
     cat: 'pii',
     rx: /\b(?:0?[1-9]|[12]\d|3[01])[\/\-](?:0?[1-9]|1[0-2])[\/\-](?:19|20)\d{2}\b|\b(?:0?[1-9]|1[0-2])[\/\-](?:0?[1-9]|[12]\d|3[01])[\/\-](?:19|20)\d{2}\b/g,
+    // Dates on business documents (`Invoice date`, `Due`, `Order placed`) are
+    // not personal data. A birth cue overrides that; an unlabelled date is
+    // still flagged.
+    validate: (match, text, idx) => {
+      const before = linePrefix(text, idx, 32);
+      if (BIRTH_CUE_RX.test(before)) return true;
+      return !DOCUMENT_DATE_CUE_RX.test(before);
+    },
     fakeValues: ['15/03/2024'],
   },
   {
@@ -918,6 +1000,14 @@ const BASE_PATTERNS = [
       // JSON makes these common: `"password": null`, `"token": {` (an object).
       if (/^(?:null|undefined|none|nil|true|false)$/i.test(value)) return false;
       if (/^[{[]/.test(value)) return false;
+      // A key that describes a property of a secret, not the secret itself:
+      // `max_tokens: 1024`, `token_type: bearer`, `PASSWORD_MIN_LENGTH=12`.
+      if (describesSecretProperty(key)) return false;
+      // A reference or placeholder, not a value: `${DB_PASSWORD}`, `$TOKEN`,
+      // `{{ secrets.KEY }}`, `%(password)s`, `<your-key>`, `sk-proj-...`.
+      if (SECRET_PLACEHOLDER_RX.test(value)) return false;
+      // A loopback host is not infrastructure worth hiding.
+      if (/host/i.test(key) && LOCAL_HOST_RX.test(value)) return false;
       return true;
     },
     // Replace the VALUE only -- form A: group 2 double-quoted, 3 single-quoted,

@@ -94,6 +94,21 @@ to 3.
   must pass mod-97 and have their country's registered length, which also
   stops a trailing word (`... 32 USD`) from being swallowed into the match.
   There are now 36 patterns.
+- **`env_secret` no longer flags properties, references or placeholders**
+  (#7). `max_tokens: 1024`, `token_type: bearer`, `PASSWORD_MIN_LENGTH=12` and
+  `TOKEN_TTL=3600` describe a secret rather than hold one; `${DB_PASSWORD}`,
+  `$API_KEY`, `{{ secrets.X }}`, `<your-password>`, `changeme` and truncated
+  examples such as `sk-proj-...` stand in for one; and `DB_HOST=localhost` is
+  not infrastructure worth hiding. Real values stay flagged, including numeric
+  passwords, `password: password` and internal hostnames.
+- **Noisy patterns need context** (#8). `passport` and `date` reject a match
+  that follows a business-document label (invoice, order, due, …) unless a
+  passport or birth label is there, and `passport` rejects codes whose digits
+  read as a YYYYMMDD date; unlabelled values are still flagged, and so are
+  document expiry and issue dates, which are personal data in HR files. `trade_lic` is
+  case-sensitive and needs a digit (`cn-north-1` was a licence). `email`
+  rejects file names such as `logo@2x.png` (only extensions that are not real
+  TLDs). `intl_phone` no longer starts inside a longer number.
 - **Masking is linear in file size** (#13). `maskText()` recounted lines from
   the start of the text for every finding and rebuilt the whole string for
   every replacement, so 8,000 JSON lines took ~6 s with one pattern and a

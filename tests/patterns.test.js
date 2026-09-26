@@ -17,6 +17,23 @@ const cases = [
   { id: 'uae_iban', input: 'IBAN AE070331234567890123456', shouldMatch: true },
   { id: 'uae_iban', input: 'IBAN AE07 0331 2345 6789 0123 456', shouldMatch: true },
   { id: 'uae_iban', input: 'IBAN GB29NWBK60161331926819', shouldMatch: false }, // UK IBAN, not UAE
+  // Noisy patterns need context (issue #8)
+  { id: 'passport', input: 'Invoice IN20240115 paid', shouldMatch: false },
+  { id: 'passport', input: 'Order PO12345678 shipped', shouldMatch: false },
+  { id: 'passport', input: 'passport no. IN20240115', shouldMatch: true }, // a passport label wins
+  { id: 'passport', input: 'Passport: AB1234567', shouldMatch: true },
+  { id: 'trade_lic', input: 'region = cn-north-1', shouldMatch: false },
+  { id: 'trade_lic', input: 'TL-ABCDEFG', shouldMatch: false }, // no digit
+  { id: 'trade_lic', input: 'Licence CN-1234567', shouldMatch: true },
+  { id: 'email', input: 'logo@2x.png', shouldMatch: false },
+  { id: 'email', input: 'icon@3x.svg', shouldMatch: false },
+  { id: 'email', input: 'x@company.md', shouldMatch: true }, // .md is Moldova's TLD
+  { id: 'date', input: 'Invoice date 15/01/2024', shouldMatch: false },
+  { id: 'date', input: 'Due: 01/02/2025', shouldMatch: false },
+  { id: 'date', input: 'Invoice for patient born 15/03/1990', shouldMatch: true },
+  { id: 'date', input: 'Joined 15/03/2019', shouldMatch: true }, // unlabelled dates stay flagged
+  { id: 'intl_phone', input: 'SKU 8971501234567', shouldMatch: false },
+  { id: 'intl_phone', input: '00971501234567', shouldMatch: true },
   // Credit cards need a Luhn check digit, and a bare digit run a network prefix (issue #6)
   { id: 'cc', input: 'card 4111 1111 1111 1111', shouldMatch: true },
   { id: 'cc', input: '4111111111111111', shouldMatch: true },
@@ -282,6 +299,25 @@ function runPatternTests() {
     ['<password></password>', false],
     ['<password>[ENV_SECRET_1]</password>', false], // already masked
     ['<add key="ApiKey" value="[ENV_SECRET_1]"/>', false],
+    // Properties of a secret, references and placeholders are not secrets (issue #7)
+    ['max_tokens: 1024', false],
+    ['maxTokens: 2048', false],
+    ['token_type: bearer', false],
+    ['PASSWORD_MIN_LENGTH=12', false],
+    ['TOKEN_TTL=3600', false],
+    ['password: ${DB_PASSWORD}', false],
+    ['API_KEY=$API_KEY', false],
+    ['token: {{ secrets.GH_TOKEN }}', false],
+    ['password: <your-password>', false],
+    ['OPENAI_API_KEY=sk-proj-...', false],
+    ['SECRET_KEY=changeme', false],
+    ['DB_HOST=localhost', false],
+    ['DB_HOST=127.0.0.1:5432', false],
+    // ...while real values stay flagged
+    ['DB_PASSWORD=123456', true],
+    ['password: password', true],
+    ['DB_HOST=db.internal.acme.net', true],
+    ['AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjEAAa', true],
   ];
   for (const [text, shouldMatch] of envSecretCases) {
     const { findings } = maskText(text, { enabled: ['env_secret'] });
