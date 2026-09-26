@@ -121,6 +121,24 @@ to 3.
   be live: Emirates IDs with a wrong check digit, cards in the 411111 test
   range, IBANs on nonexistent banks, SSNs in the never-issued group 00, IPs in
   10.0.0.0/8 and emails on example.com.
+- **agent-guard watches subfolders on Linux** (#16). It passed
+  `recursive: false` to `fs.watch` on Linux, so a secret written to
+  `./project/config/.env` was never passively scanned, and the polling
+  fallback only listed the top level too. It now uses a recursive watch where
+  the platform has one (Linux from Node 20), one watcher per directory
+  otherwise (Linux on Node 18, adding watchers as folders appear and scanning
+  files already inside them), and a recursive walk when polling.
+  `node_modules`, `.git` and similar are skipped. `/health` adds
+  `watchStrategy` (`native` | `tree` | `poll`) and `watchRecursive`, and
+  `KAKASHI_GUARD_WATCH` forces a strategy.
+- **Architecture docs describe the current release** (#20).
+  `docs/ARCHITECTURE.md` still described v1.1 (35 patterns, six commands, 101
+  tests). It now covers v1.3 and this release: 36 patterns, the 14 commands,
+  the new engine modules and the version history. `README.ar.md` lists the 14
+  commands and 7 agents, the pilot-kit FAQ and demo script no longer claim
+  "20+ agents", and `docs/TECHNICAL_IMPLEMENTATION.md` is marked as a v1.1
+  snapshot. A docs test checks every stated pattern and command count against
+  the code.
 - **Masking is linear in file size** (#13). `maskText()` recounted lines from
   the start of the text for every finding and rebuilt the whole string for
   every replacement, so 8,000 JSON lines took ~6 s with one pattern and a

@@ -100,6 +100,34 @@ function runDocsTests() {
     assert(/Unknown agent id: aider/.test(r.stderr), r.stderr);
   });
 
+  // -------------------------------------------------------------------------
+  // Counts stated in the docs match the code (issue #20): docs/ARCHITECTURE.md
+  // sat at "35 patterns, six slash commands, 101 tests" two releases on.
+  // -------------------------------------------------------------------------
+  const { PATTERNS } = require('../src/engine/patterns');
+  const commands = fs.readdirSync(path.join(ROOT, 'commands')).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
+  for (const file of ['README.md', path.join('docs', 'ARCHITECTURE.md')]) {
+    const body = fs.readFileSync(path.join(ROOT, file), 'utf8');
+
+    check(`${file}: every stated pattern count is ${PATTERNS.length}`, () => {
+      const stated = [...body.matchAll(/\b(\d+) (?:active )?(?:detection )?(?:patterns|rules|pattern ids)\b/g)].map((m) => Number(m[1]));
+      assert(stated.length > 0, 'no pattern count found');
+      assert.deepStrictEqual(stated.filter((n) => n !== PATTERNS.length), []);
+    });
+
+    check(`${file}: every stated command count is ${commands.length}`, () => {
+      const stated = [...body.matchAll(/\ball (\d+) commands\b|\b(\d+)-command\b|full set \((\d+)\)/g)]
+        .map((m) => Number(m[1] || m[2] || m[3]));
+      assert(stated.length > 0, 'no command count found');
+      assert.deepStrictEqual(stated.filter((n) => n !== commands.length), []);
+    });
+
+    check(`${file}: lists every command`, () => {
+      const missing = commands.filter((c) => !body.includes(`/${c}`));
+      assert.deepStrictEqual(missing, []);
+    });
+  }
+
   console.log(`docs.test.js: ${passed} passed, ${failed} failed`);
   return failed === 0;
 }

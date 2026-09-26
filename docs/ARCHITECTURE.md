@@ -1,7 +1,12 @@
-# Kakashi Architecture (v1.1)
+# Kakashi Architecture (v1.3)
 
 > This document is the technical reference for how Kakashi works: every claim
 > made elsewhere about the system is backed by the components documented below.
+> The Guardian, the release-decision loop added in v1.2, has its own design
+> document: [AGENTIC_ARCHITECTURE.md](AGENTIC_ARCHITECTURE.md).
+>
+> Counts in this document (patterns, commands) are checked against the code by
+> `tests/docs.test.js`.
 
 ---
 
@@ -15,11 +20,15 @@ flowchart TB
     SkillMD["SKILL.md / CLAUDE.md / AGENTS.md<br/>(tells the agent WHEN to scan)"]
   end
   subgraph L2 [Layer 2 - Core Engine]
-    Patterns["patterns.js<br/>(35 detection rules)"]
+    Patterns["patterns.js<br/>(36 detection patterns)"]
+    Fields["person-fields.js<br/>(names by key / column)"]
     Masker["masker.js<br/>(tokenise + reconstruct)"]
+    Fakes["fakes.js<br/>(distinct fake values)"]
     Formats["formats/<br/>(text, xlsx, docx, pptx, pdf)"]
     DB["engine/db/<br/>(6 driver adapters)"]
+    Fields --> Patterns
     Patterns --> Masker
+    Fakes --> Masker
     Masker --> Formats
     DB --> Masker
   end
@@ -32,8 +41,9 @@ flowchart TB
     ScanDir --> Pdpl
     I18n --> Reporter
   end
-  subgraph L4 [Layer 4 - Agentic Sidecar]
-    Guard["agent/guard.js<br/>(loopback HTTP + fs watcher)"]
+  subgraph L4 [Layer 4 - Guardian + Sidecar]
+    Guardian["guardian/<br/>(release decisions)"]
+    Guard["agent/guard.js<br/>(loopback HTTP + recursive watcher)"]
   end
   subgraph AGENTS [AI Agents]
     Cursor
@@ -45,6 +55,7 @@ flowchart TB
   AGENTS --> SkillMD
   SkillMD -->|shell out| L2
   ScanDir --> L2
+  Guardian --> L2
   Guard --> L2
   AGENTS -.HTTP loopback.-> Guard
 ```
@@ -135,15 +146,17 @@ sequenceDiagram
 
 ---
 
-## 3. Module reference (v1.1)
+## 3. Module reference (v1.3)
 
 ### 3.1 Core engine
 
 | Module | Purpose | Public API |
 | --- | --- | --- |
-| [src/engine/patterns.js](../src/engine/patterns.js) | 35 detection patterns, checksum helpers (Luhn, Emirates-ID, IBAN) | `PATTERNS`, `luhnCheck`, `isValidEmiratesId`, `isValidIban` |
-| [src/engine/masker.js](../src/engine/masker.js) | Tokenise + reconstruct | `maskText(text, opts)` |
-| [src/engine/formats/](../src/engine/formats/) | Per-format read/write | `readFile`, `writeMasked` |
+| [src/engine/patterns.js](../src/engine/patterns.js) | 36 detection patterns, each a regex with an optional `validate()` and/or a `detect(text)` hook for structural detection; checksum helpers (Luhn, Emirates ID, IBAN mod-97 plus per-country length) | `PATTERNS`, `luhnCheck`, `isValidEmiratesId`, `isValidIban`, `isOrgOrPlace` |
+| [src/engine/person-fields.js](../src/engine/person-fields.js) | Names found by the key, label or column header they sit under, in any case or script (the `full_name` pattern's `detect` hook) | `createPersonFieldDetector`, `classifyKey` |
+| [src/engine/masker.js](../src/engine/masker.js) | Tokenise + reconstruct, in one linear pass | `maskText(text, opts)` |
+| [src/engine/fakes.js](../src/engine/fakes.js) | `--mode fake` values: distinct per original, deterministic, never-live where the format allows | `fakeValue(id, n, fakeValues)` |
+| [src/engine/formats/](../src/engine/formats/) | Per-format read/write. Spreadsheets are read one row per line so headers label columns; writers replace name-like values as whole words (`replace.js`) | `readFile`, `writeMasked` |
 | [src/engine/db/](../src/engine/db/) | Client-side DB masking | `streamMasked(conn, query, opts)` |
 
 ### 3.2 Compliance & UX
@@ -160,7 +173,7 @@ sequenceDiagram
 
 | Module | Purpose | Public API |
 | --- | --- | --- |
-| [src/agent/guard.js](../src/agent/guard.js) | Loopback HTTP daemon + fs watcher | `start(opts)`, `scanFile`, `maskFile` |
+| [src/agent/guard.js](../src/agent/guard.js) | Loopback HTTP daemon + recursive watcher: native recursive `fs.watch`, else one watcher per directory (Linux on Node 18), else recursive polling. `/health` reports `watchMode`, `watchStrategy` and `watchRecursive` | `start(opts)`, `scanFile`, `maskFile` |
 
 ### 3.4 Guardian (v1.2)
 
@@ -171,7 +184,7 @@ transformation capability of its own. Runs in-process — no daemon required. Se
 | Module | Purpose | Public API |
 | --- | --- | --- |
 | [src/guardian/index.js](../src/guardian/index.js) | The agent loop | `runGuardian(opts)`, `DECISIONS` |
-| [src/guardian/classes.js](../src/guardian/classes.js) | 35 pattern ids → 9 sensitivity classes | `classOf`, `patternIdsFor` |
+| [src/guardian/classes.js](../src/guardian/classes.js) | 36 pattern ids → 9 sensitivity classes | `classOf`, `patternIdsFor` |
 | [src/guardian/state.js](../src/guardian/state.js) | Run memory; drives replanning | `GuardianState`, `STATUS` |
 | [src/guardian/observe.js](../src/guardian/observe.js) | Sensor over `maskText` + `summarize`; metadata only | `observe(path)` |
 | [src/guardian/risk.js](../src/guardian/risk.js) | Contextual score + reason codes | `RiskEngine.assess` |
@@ -241,16 +254,30 @@ Any AI agent capable of shelling out or making local HTTP calls can integrate wi
 
 ### 6.1 Shell-based agents (Claude Code, Cursor, Codex CLI)
 
-Six slash commands are installed as agent-scoped skills:
+`bin/install.js` sets up seven agents (Claude Code, Cursor, Codex CLI, Windsurf,
+Cline, GitHub Copilot, Continue). Agents with a native command-file mechanism get
+all 14 commands from [`commands/`](../commands/); the others get the same
+behaviour through an always-on rule:
 
 ```
-/kakashi              activate privacy mode
-/kakashi-scan <path>  counts only (agent-safe)
-/kakashi-mask <path>  write masked_<file>
-/kakashi-audit <path> deliberately verbose
-/kakashi-stats        cumulative
-/kakashi-list         all detection patterns
+/kakashi                    show the brief or pick the right tool from your intent
+/kakashi-scan <path>        scan one file; counts only (agent-safe)
+/kakashi-mask <path>        write masked_<file> alongside the original
+/kakashi-scan-dir <dir>     scan a folder and produce a PDPL-mapped report
+/kakashi-mask-dir <dir>     batch-mask a folder after confirmation
+/kakashi-guard <path>       decide whether a file may be released
+/kakashi-db-scan <conn>     scan database query results; counts only
+/kakashi-db-mask <conn>     mask query results into a safe local copy
+/kakashi-db-audit <conn>    show the DB token map (deliberately exposes plaintext)
+/kakashi-audit <path>       show the file token map (deliberately exposes plaintext)
+/kakashi-agent-guard <dir>  start the loopback-only privacy sidecar
+/kakashi-stats              show cumulative local counters
+/kakashi-list               list every active detection pattern
+/kakashi-impact             create a value-free impact snapshot
 ```
+
+Any other agent that can run a shell command can use Kakashi with the rule
+block from [`AGENTS.md`](../AGENTS.md) in its own rules file.
 
 The agent shells out to `kakashi <subcommand>` and reads stdout. Default counts-only output means no raw secrets ever enter the agent's LLM context.
 
@@ -298,7 +325,7 @@ Kakashi is a rule-based safety layer, not an AI model. It nonetheless aligns exp
 | **Inclusive growth, sustainable development, well-being** | MIT-licensed, free at point of use, no per-seat cost. Makes agentic AI accessible without excluding smaller organisations. |
 | **Human-centred values & fairness** | Native Emirates-ID + Arabic-name detection. Bilingual CLI. No user is a second-class citizen of the tool. |
 | **Transparency & explainability** | Every detection is a readable regex. `list-patterns` prints every active rule. `audit` gives full traceability. |
-| **Robustness, security & safety** | Threat model documented above. 101 automated tests. Zero network calls. Loopback-only daemon. |
+| **Robustness, security & safety** | Threat model documented above. 500+ automated tests, run in CI on Node 18, 20 and 22 against a real Postgres. Zero network calls. Loopback-only daemon. |
 | **Accountability** | JSONL audit log, PDPL-mapped compliance reports, cumulative session stats. Everything is inspectable and evidentiary. |
 
 UAE-specific overlays:
@@ -350,8 +377,12 @@ GitHub Actions example:
 
 | Version | Date | Highlights |
 | --- | --- | --- |
-| 1.0.0 | 2026-05 | Initial: patterns, masker, 5 formats, CLI, 20+ agent skills |
-| **1.1.0** | **2026-09** | **UAE patterns (Emirates ID + IBAN + Arabic names), PDPL mapping, scan-dir with HTML/JSON/MD reporter, DB masking (6 drivers), agent-guard daemon, bilingual CLI, 101 tests** |
+| 1.0.0 | 2026-05 | Initial: patterns, masker, 5 formats, CLI, agent skills |
+| 1.1.0 | 2026-09-16 | UAE patterns (Emirates ID + IBAN + Arabic names), PDPL mapping, scan-dir with HTML/JSON/MD reporter, DB masking (6 drivers), agent-guard daemon, bilingual CLI |
+| 1.2.0 | 2026-09-18 | The Guardian: autonomous release decisions (observe → assess → plan → policy → act → verify → replan), task understanding, value-free audit log |
+| 1.3.0 | 2026-09-23 | `/kakashi` orchestrator picks the tool from intent; 14 commands; agent-guard degrades to polling on Windows |
+| 1.3.1 | 2026-09-23 | `/kakashi` works in agents without native slash commands |
+| **Unreleased** | | **Names by field and column; quoted-key secrets; Luhn, Emirates ID and all-country IBAN checks; linear-time masking; distinct fakes and consistent tokens across files; recursive agent-guard watching on Linux. See [CHANGELOG.md](../CHANGELOG.md).** |
 
 ---
 

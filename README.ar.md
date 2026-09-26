@@ -131,16 +131,26 @@ kakashi mask quarterly_report.xlsx
 
 ## يعمل داخل وكيلك
 
-ست أوامر Slash يتم تثبيتها مباشرة في محادثة الوكيل — Claude Code و Cursor و Codex CLI و Windsurf يحصلون على المجموعة الكاملة:
+يثبّت برنامج التثبيت Kakashi في سبعة وكلاء: Claude Code و Cursor و Codex CLI و Windsurf و Cline و GitHub Copilot و Continue. الوكلاء الذين يدعمون ملفات الأوامر يحصلون على الأوامر الأربعة عشر كاملة، والباقون يحصلون على السلوك نفسه عبر قاعدة دائمة:
 
 ```
-/kakashi              فعّل وضع الخصوصية للجلسة
-/kakashi-scan <path>  الأعداد فقط — بدون معاينات (آمن للوكيل، افتراضي)
-/kakashi-mask <path>  اكتب masked_<file> بجانب الأصل
-/kakashi-audit <path> التخطيط الكامل من الأصل → البديل (يكشف الأسرار عمداً)
-/kakashi-stats        إحصاءات الجلسة التراكمية
-/kakashi-list         كل أنماط الاكتشاف النشطة
+/kakashi                    اعرض النبذة أو اختر الأداة المناسبة من طلبك
+/kakashi-scan <path>        افحص ملفاً واحداً — الأعداد فقط (آمن للوكيل)
+/kakashi-mask <path>        اكتب masked_<file> بجانب الأصل
+/kakashi-scan-dir <dir>     افحص مجلداً وأنشئ تقريراً مربوطاً بمواد القانون
+/kakashi-mask-dir <dir>     أخفِ ملفات مجلد كامل بعد التأكيد
+/kakashi-guard <path>       قرّر هل يجوز إطلاق الملف ولأي وكيل
+/kakashi-db-scan <conn>     افحص نتائج استعلام قاعدة بيانات — الأعداد فقط
+/kakashi-db-mask <conn>     أخفِ نتائج الاستعلام في نسخة محلية آمنة
+/kakashi-db-audit <conn>    خريطة الرموز لقاعدة البيانات (يكشف القيم عمداً)
+/kakashi-audit <path>       خريطة الرموز للملف (يكشف القيم عمداً)
+/kakashi-agent-guard <dir>  شغّل خدمة الخصوصية المحلية (loopback فقط)
+/kakashi-stats              العدادات المحلية التراكمية
+/kakashi-list               كل أنماط الاكتشاف النشطة
+/kakashi-impact             لقطة أثر خالية من القيم
 ```
+
+أي وكيل آخر يستطيع تشغيل أوامر الطرفية يمكنه استخدام Kakashi أيضاً: انسخ قسم Kakashi من ملف [`AGENTS.md`](AGENTS.md) إلى ملف قواعد ذلك الوكيل.
 
 ## أكثر من 50 صيغة ملف
 
