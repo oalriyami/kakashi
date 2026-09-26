@@ -43,6 +43,36 @@ const { version } = require('../../package.json');
 
 const LOOPBACK = ['127', '0', '0', '1'].join('.');
 
+/** Directories never worth watching: dependency trees and VCS internals. */
+const SKIP_DIRS = new Set(['node_modules', '.git', '.hg', '.svn', '__pycache__', '.venv', 'venv']);
+
+/** Every directory under `root` (inclusive), skipping SKIP_DIRS and symlinks. */
+function listDirs(root) {
+  const out = [];
+  const queue = [root];
+  while (queue.length) {
+    const dir = queue.shift();
+    out.push(dir);
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (e.isDirectory() && !SKIP_DIRS.has(e.name)) queue.push(path.join(dir, e.name));
+    }
+  }
+  return out;
+}
+
+/** Every regular file under `root`, skipping SKIP_DIRS and symlinks. */
+function listFiles(root) {
+  const out = [];
+  for (const dir of listDirs(root)) {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) if (e.isFile()) out.push(path.join(dir, e.name));
+  }
+  return out;
+}
+
 const DEFAULTS = {
   port: 8797,
   bindAddress: LOOPBACK,
@@ -127,7 +157,11 @@ async function start(options) {
   // ---- Passive scanner ------------------------------------------------------
   //
   // fs.watch is best-effort across platforms:
-  //   Linux   → inotify, reliable but non-recursive so we watch only the top level
+  //   Linux   → inotify. `recursive: true` works from Node 20 (19.1); Node 18
+  //             throws ERR_FEATURE_UNAVAILABLE_ON_PLATFORM, and we then watch
+  //             every directory of the tree ourselves. Before this, Linux only
+  //             ever watched the top level, so a secret written to
+  //             ./project/config/.env was never seen (issue #16).
   //   macOS   → FSEvents via recursive:true, reliable
   //   Windows → ReadDirectoryChangesW; on network drives, mapped drives (G:), or
   //             certain sandboxed paths it throws `UNKNOWN: unknown error, watch`
@@ -142,13 +176,25 @@ async function start(options) {
   // and rely solely on the loopback API.
   const NO_WATCH_ENV = process.env.KAKASHI_GUARD_NO_WATCH === '1';
   const POLL_INTERVAL_MS = Number(process.env.KAKASHI_GUARD_POLL_MS || 5000);
+  // Force one strategy: native (recursive fs.watch), tree (one watcher per
+  // directory) or poll. Unset: native, then tree, then poll.
+  const FORCE_STRATEGY = process.env.KAKASHI_GUARD_WATCH || '';
+  const MAX_WATCHED_DIRS = Number(process.env.KAKASHI_GUARD_MAX_DIRS || 4096);
   let watcher = { close: () => {} };
   let poller = null;
   let watchMode = 'off';
+  let watchStrategy = null; // native | tree | poll
 
   async function onChangeCandidate(filename) {
     if (!filename) return;
     const full = path.isAbsolute(filename) ? filename : path.join(watch, filename);
+    const relative = path.relative(watch, full);
+    if (relative.split(path.sep).some((part) => SKIP_DIRS.has(part))) return;
+    try {
+      if (!fs.statSync(full).isFile()) return; // directories and deleted paths
+    } catch {
+      return;
+    }
     const now = Date.now();
     const last = state.lastScanAt.get(full) || 0;
     if (now - last < DEFAULTS.scanCooldownMs) return;
@@ -161,82 +207,148 @@ async function start(options) {
       state.findings += result.summary.total;
       emit({
         kind: 'passive_scan',
-        path: filename,
+        path: relative,
         findings: result.summary.total,
         bySeverity: result.summary.bySeverity,
       });
       if (autoMask && result.summary.total > 0) {
         const masked = await maskFile(full);
-        emit({ kind: 'auto_masked', path: filename, output: masked.output, findings: masked.findings.length });
+        emit({ kind: 'auto_masked', path: relative, output: masked.output, findings: masked.findings.length });
       }
     } catch (err) {
-      emit({ kind: 'scan_error', path: filename, error: err.message });
+      emit({ kind: 'scan_error', path: relative, error: err.message });
     }
+  }
+
+  function degradeToPolling(err) {
+    if (err) emit({ kind: 'watch_failed', platform: process.platform, error: err.message });
+    try { watcher.close(); } catch { /* already closed */ }
+    watchMode = 'poll';
+    watchStrategy = 'poll';
+    poller = startPolling();
+  }
+
+  function startNativeWatch() {
+    const w = fs.watch(watch, { recursive: true }, (_evt, filename) => {
+      if (filename) onChangeCandidate(String(filename));
+    });
+    // Some Windows failures come as an emitted 'error' rather than a throw.
+    w.on('error', (err) => degradeToPolling(err));
+    return w;
+  }
+
+  /**
+   * One fs.watch per directory, for Linux on Node 18. New subdirectories get
+   * their own watcher as they appear, and files already inside them are
+   * scanned, since they may have been written before the watcher attached.
+   */
+  function startTreeWatch() {
+    const watchers = new Map(); // dir -> FSWatcher
+    const close = () => {
+      for (const w of watchers.values()) { try { w.close(); } catch { /* closed */ } }
+      watchers.clear();
+    };
+    const add = (dir) => {
+      if (watchers.has(dir)) return;
+      if (watchers.size >= MAX_WATCHED_DIRS) {
+        throw new Error(`more than ${MAX_WATCHED_DIRS} directories to watch (KAKASHI_GUARD_MAX_DIRS)`);
+      }
+      const w = fs.watch(dir, (_evt, name) => {
+        if (!name) return;
+        const full = path.join(dir, String(name));
+        let stat;
+        try { stat = fs.statSync(full); } catch { return; }
+        if (!stat.isDirectory()) {
+          onChangeCandidate(full);
+          return;
+        }
+        if (SKIP_DIRS.has(path.basename(full))) return;
+        try {
+          for (const d of listDirs(full)) add(d);
+          for (const f of listFiles(full)) onChangeCandidate(f);
+        } catch (err) {
+          emit({ kind: 'watch_failed', platform: process.platform, error: err.message });
+        }
+      });
+      w.on('error', () => {
+        try { w.close(); } catch { /* closed */ }
+        watchers.delete(dir);
+      });
+      watchers.set(dir, w);
+    };
+    try {
+      for (const d of listDirs(watch)) add(d);
+    } catch (err) {
+      close();
+      throw err;
+    }
+    return { close, get size() { return watchers.size; } };
   }
 
   if (NO_WATCH_ENV) {
     emit({ kind: 'watch_disabled', reason: 'KAKASHI_GUARD_NO_WATCH' });
+  } else if (FORCE_STRATEGY === 'poll') {
+    degradeToPolling(null);
   } else {
     try {
-      watcher = fs.watch(watch, { recursive: process.platform !== 'linux' }, (_evt, filename) => {
-        onChangeCandidate(filename);
-      });
-      // Some Windows failures come as an emitted 'error' rather than a throw.
-      watcher.on('error', (err) => {
-        emit({ kind: 'watch_failed', platform: process.platform, error: err.message });
-        try { watcher.close(); } catch { /* already closed */ }
-        watchMode = 'poll';
-        poller = startPolling();
-      });
+      if (FORCE_STRATEGY === 'tree') throw Object.assign(new Error('tree watching forced'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' });
+      watcher = startNativeWatch();
       watchMode = 'watch';
+      watchStrategy = 'native';
     } catch (err) {
-      // Synchronous throw (UNKNOWN on Windows / EPERM on network share / etc.).
-      // Degrade to polling; keep the HTTP API alive.
-      emit({ kind: 'watch_failed', platform: process.platform, error: err.message });
-      watchMode = 'poll';
-      poller = startPolling();
+      if (err && err.code === 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM') {
+        // Recursive watching isn't available here (Linux on Node 18): watch
+        // each directory instead, and poll only if that fails too.
+        try {
+          watcher = startTreeWatch();
+          watchMode = 'watch';
+          watchStrategy = 'tree';
+        } catch (treeErr) {
+          degradeToPolling(treeErr);
+        }
+      } else {
+        // Synchronous throw (UNKNOWN on Windows / EPERM on network share / etc.).
+        // Degrade to polling; keep the HTTP API alive.
+        degradeToPolling(err);
+      }
     }
   }
 
   /**
-   * Poor-man's watcher: every POLL_INTERVAL_MS, list the directory and diff
-   * modification times against the last snapshot. Detects new + modified files;
-   * respects the same debounce as fs.watch, so an rapid save loop doesn't
-   * hammer the scanner.
+   * Poor-man's watcher: every POLL_INTERVAL_MS, walk the tree and diff
+   * modification times against the last snapshot. Detects new + modified files
+   * at any depth; respects the same debounce as fs.watch, so a rapid save loop
+   * doesn't hammer the scanner.
    */
   function startPolling() {
     const known = new Map(); // path → mtimeMs
+    const snapshot = () => {
+      const seen = new Map();
+      for (const full of listFiles(watch)) {
+        try { seen.set(full, fs.statSync(full).mtimeMs); } catch { /* vanished */ }
+      }
+      return seen;
+    };
     const tick = async () => {
-      let entries;
+      let seen;
       try {
-        entries = fs.readdirSync(watch, { withFileTypes: true });
+        seen = snapshot();
       } catch (err) {
         emit({ kind: 'poll_error', error: err.message });
         return;
       }
-      for (const e of entries) {
-        if (!e.isFile()) continue;
-        const full = path.join(watch, e.name);
-        let mtime;
-        try {
-          mtime = fs.statSync(full).mtimeMs;
-        } catch { continue; }
+      for (const [full, mtime] of seen) {
         if (known.get(full) !== mtime) {
           known.set(full, mtime);
-          onChangeCandidate(e.name);
+          onChangeCandidate(full);
         }
       }
     };
     // Seed the snapshot on start so we don't fire a "changed" event for every
     // pre-existing file the first time round.
     try {
-      for (const e of fs.readdirSync(watch, { withFileTypes: true })) {
-        if (e.isFile()) {
-          try { known.set(path.join(watch, e.name), fs.statSync(path.join(watch, e.name)).mtimeMs); }
-          catch { /* skip */ }
-        }
-      }
-    } catch { /* readdir failed; the poller will report on next tick */ }
+      for (const [full, mtime] of snapshot()) known.set(full, mtime);
+    } catch { /* the poller will report on next tick */ }
     return setInterval(tick, POLL_INTERVAL_MS);
   }
 
@@ -264,6 +376,11 @@ async function start(options) {
         // we degraded to polling. Useful for the Windows UNKNOWN case where
         // the daemon looked dead but is actually serving on loopback.
         watchMode,
+        // How the tree is watched: native (recursive fs.watch), tree (one
+        // watcher per directory, Linux on Node 18) or poll. Every strategy
+        // covers subdirectories; watchRecursive says so explicitly.
+        watchStrategy,
+        watchRecursive: watchMode !== 'off',
         version,
       }));
       return;
