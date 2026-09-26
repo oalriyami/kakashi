@@ -351,6 +351,90 @@ function runPatternTests() {
   }
 
   // -------------------------------------------------------------------------
+  // Token formats that used to pass through (issue #5), and phone numbers
+  // without separators (issue #11). Each format has a positive case and a near
+  // miss. Values are assembled at runtime so no provider-shaped token sits in
+  // this file: secret scanners would block the push. The positives run the FULL
+  // detector and check which pattern wins the span; the near misses check that
+  // the target pattern stays silent.
+  // -------------------------------------------------------------------------
+  {
+    const j = (...parts) => parts.join('');
+    const r = (n) => 'aB3dE5fG7h'.repeat(Math.ceil(n / 10)).slice(0, n);
+    const b64 = (s) => Buffer.from(s).toString('base64');
+    const HEX32 = j('5d41402abc4b2a76', 'b9719d911017c592');
+    const AWS_ID = j('AK', 'IA', 'ABCDEFGHIJKLMNOP');
+    const AWS_SECRET = j('wJal', 'rXUtnFEMI/K7MDENG/bPxRfiCY', 'EXAMPLEKEY');
+    const pem = (type) => `-----BEGIN ${type}-----\nMIIabc\n-----END ${type}-----`;
+    // [text, pattern id, the span it must replace (null: must not match)]
+    const formatCases = [
+      [`token ${j('github', '_pat_', r(22), '_', r(59))}`, 'gh_token', j('github', '_pat_', r(22), '_', r(59))],
+      [`token ${j('github', '_pat_', 'short')}`, 'gh_token', null],
+      [`token ${j('gl', 'pat-', r(20))}`, 'gitlab_token', j('gl', 'pat-', r(20))],
+      [`runner ${j('gl', 'rt-', r(24))}`, 'gitlab_token', j('gl', 'rt-', r(24))],
+      [`see the ${j('gl', 'pat-', 'docs')} page`, 'gitlab_token', null],
+      [`key=${j('AI', 'za', r(35))}&q=1`, 'google_api_key', j('AI', 'za', r(35))],
+      [`key ${j('AI', 'za', r(36))}`, 'google_api_key', null], // one character too long
+      [`x ${j('rk', '_live_', r(24))}`, 'stripe', j('rk', '_live_', r(24))],
+      [`x ${j('wh', 'sec_', r(32))}`, 'stripe', j('wh', 'sec_', r(32))],
+      [`x ${j('rk', '_live_', 'short')}`, 'stripe', null],
+      [`x ${j('S', 'G.', r(22), '.', r(43))}`, 'sendgrid_key', j('S', 'G.', r(22), '.', r(43))],
+      [`x ${j('S', 'G.', r(22), '.', r(40))}`, 'sendgrid_key', null],
+      [`x ${j('np', 'm_', r(36))}`, 'npm_token', j('np', 'm_', r(36))],
+      [`x ${j('np', 'm_', r(35))}`, 'npm_token', null],
+      ['npm_config_cache_directory_setting_x', 'npm_token', null],
+      [`post ${j('https://hooks.', 'slack.com/services/', 'T0ABCDEFG/B0ABCDEFG/', r(24))}`, 'slack_webhook',
+        j('https://hooks.', 'slack.com/services/', 'T0ABCDEFG/B0ABCDEFG/', r(24))],
+      ['see https://hooks.slack.com/ for setup', 'slack_webhook', null],
+      [`AccountName=acct;${j('Account', 'Key=', r(86), '==')};EndpointSuffix=core.windows.net`, 'azure_storage_key', j(r(86), '==')],
+      [`Endpoint=sb://x/;${j('SharedAccess', 'Key=', r(43), '=')}`, 'azure_storage_key', j(r(43), '=')],
+      ['AccountName=acct;AccountKey=;', 'azure_storage_key', null],
+      [`Authorization: Basic ${b64('admin:hunter22')}`, 'basic_auth', `Basic ${b64('admin:hunter22')}`],
+      [`curl -H "authorization: basic ${b64('svc:pa55word')}"`, 'basic_auth', `basic ${b64('svc:pa55word')}`],
+      ['Basic understanding of algorithms is required', 'basic_auth', null],
+      [`Authorization: Basic ${b64('test')}`, 'basic_auth', null], // no user:password inside
+      [`Access key ID,Secret access key\n${AWS_ID},${AWS_SECRET}`, 'aws_secret', AWS_SECRET],
+      [`aws secret: ${AWS_SECRET}`, 'aws_secret', AWS_SECRET],
+      [`value ${AWS_SECRET}`, 'aws_secret', null], // no key id or label nearby
+      [`aws ${'a1b2c3d4e5'.repeat(4)}`, 'aws_secret', null], // no upper case: not base64 key material
+      [pem('ENCRYPTED PRIVATE KEY'), 'ssh_key', pem('ENCRYPTED PRIVATE KEY')],
+      [pem('DSA PRIVATE KEY'), 'ssh_key', pem('DSA PRIVATE KEY')],
+      [pem('PGP PRIVATE KEY BLOCK'), 'ssh_key', pem('PGP PRIVATE KEY BLOCK')],
+      [pem('PGP PUBLIC KEY BLOCK'), 'ssh_key', null],
+      ['-----BEGIN DSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----', 'ssh_key', null],
+      [`api key: ${HEX32}`, 'hex_secret', HEX32],
+      [`curl -H "X-Auth: ${HEX32}"`, 'hex_secret', HEX32],
+      [`md5: ${HEX32}`, 'hex_secret', null],
+      [`request id ${HEX32}`, 'hex_secret', null],
+      [HEX32, 'hex_secret', null],
+      // issue #11
+      ['call +447946095812 now', 'phone', '+447946095812'],
+      ['mobile +966501234567', 'phone', '+966501234567'],
+      ['tel 020 7946 0958', 'phone', '020 7946 0958'],
+      ['Phone: 0161 496 0000', 'phone', '0161 496 0000'],
+      ['هاتف 020 7946 0958', 'phone', '020 7946 0958'],
+      ['ref 020 7946 0958', 'phone', null], // national grouping without a phone label
+      ['ts 1727366400000', 'phone', null],
+      ['order 4000123456789', 'phone', null],
+      ['x+447946095812', 'phone', null],
+      ['offset +1234567', 'phone', null], // too short
+      ['+971501234567', 'phone', null], // left to intl_phone
+    ];
+    for (const [text, id, want] of formatCases) {
+      const got = want === null
+        ? maskText(text, { enabled: [id] }).findings.map((f) => f.original)
+        : maskText(text).findings.filter((f) => f.original === want).map((f) => f.id);
+      const ok = want === null ? got.length === 0 : got.length === 1 && got[0] === id;
+      if (ok) {
+        passed++;
+      } else {
+        console.error(`FAIL ${id} ${JSON.stringify(text.slice(0, 60))}: expected ${want === null ? 'no match' : 'a match'}, got ${JSON.stringify(got)}`);
+        failed++;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // hex_secret vs hashes (issue #4). A git commit is 40 hex characters and a
   // SHA-256 checksum 64, so every changelog, lockfile and CI log read as a
   // credential and the Guardian demanded approval for harmless files.
@@ -400,6 +484,8 @@ function runPatternTests() {
     // The match includes the surrounding SQL clause; the fake is only the quoted
     // value, which is correct for substitution but not self-detecting.
     sql_password: 'fake is the value only; the pattern needs its SQL context',
+    azure_storage_key: 'fake is the value only; the pattern needs its AccountKey= context',
+    aws_secret: 'a bare 40-character key needs a key id or label nearby to count',
   };
   for (const p of PATTERNS) {
     if (!p.fakeValues || FAKE_EXEMPT[p.id]) { passed++; continue; }

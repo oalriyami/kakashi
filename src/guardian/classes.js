@@ -3,8 +3,8 @@
  *
  * Kakashi's engine speaks in *pattern ids* (`national_id`, `openai_key`, ...).
  * That is the right granularity for a detector but the wrong granularity for a
- * security policy: nobody wants to write a rule that enumerates all 15 credential
- * patterns. This module collapses the 35 pattern ids onto 9 stable classes that a
+ * security policy: nobody wants to write a rule that enumerates all 25 credential
+ * patterns. This module collapses the 44 pattern ids onto 9 stable classes that a
  * policy, a risk engine and a human can all reason about.
  *
  * Deliberately DATA, not logic — same convention as lib/pdpl-mapping.js. It adds
@@ -87,7 +87,15 @@ const PATTERN_TO_CLASS = {
   gh_token:         'CREDENTIAL',
   slack:            'CREDENTIAL',
   stripe:           'CREDENTIAL',
+  gitlab_token:     'CREDENTIAL',
+  google_api_key:   'CREDENTIAL',
+  sendgrid_key:     'CREDENTIAL',
+  npm_token:        'CREDENTIAL',
+  slack_webhook:    'CREDENTIAL',
   bearer:           'CREDENTIAL',
+  basic_auth:       'CREDENTIAL',
+  azure_storage_key: 'CREDENTIAL',
+  aws_secret:       'CREDENTIAL',
   db_conn:          'CREDENTIAL',
   sql_password:     'CREDENTIAL',
   databricks_token: 'CREDENTIAL',

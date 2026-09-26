@@ -20,7 +20,7 @@ flowchart TB
     SkillMD["SKILL.md / CLAUDE.md / AGENTS.md<br/>(tells the agent WHEN to scan)"]
   end
   subgraph L2 [Layer 2 - Core Engine]
-    Patterns["patterns.js<br/>(36 detection patterns)"]
+    Patterns["patterns.js<br/>(44 detection patterns)"]
     Fields["person-fields.js<br/>(names by key / column)"]
     Masker["masker.js<br/>(tokenise + reconstruct)"]
     Fakes["fakes.js<br/>(distinct fake values)"]
@@ -152,7 +152,7 @@ sequenceDiagram
 
 | Module | Purpose | Public API |
 | --- | --- | --- |
-| [src/engine/patterns.js](../src/engine/patterns.js) | 36 detection patterns, each a regex with an optional `validate()` and/or a `detect(text)` hook for structural detection; checksum helpers (Luhn, Emirates ID, IBAN mod-97 plus per-country length) | `PATTERNS`, `luhnCheck`, `isValidEmiratesId`, `isValidIban`, `isOrgOrPlace` |
+| [src/engine/patterns.js](../src/engine/patterns.js) | 44 detection patterns, each a regex with an optional `validate()` and/or a `detect(text)` hook for structural detection; checksum helpers (Luhn, Emirates ID, IBAN mod-97 plus per-country length) | `PATTERNS`, `luhnCheck`, `isValidEmiratesId`, `isValidIban`, `isOrgOrPlace` |
 | [src/engine/person-fields.js](../src/engine/person-fields.js) | Names found by the key, label or column header they sit under, in any case or script (the `full_name` pattern's `detect` hook) | `createPersonFieldDetector`, `classifyKey` |
 | [src/engine/masker.js](../src/engine/masker.js) | Tokenise + reconstruct, in one linear pass | `maskText(text, opts)` |
 | [src/engine/fakes.js](../src/engine/fakes.js) | `--mode fake` values: distinct per original, deterministic, never-live where the format allows | `fakeValue(id, n, fakeValues)` |
@@ -184,7 +184,7 @@ transformation capability of its own. Runs in-process — no daemon required. Se
 | Module | Purpose | Public API |
 | --- | --- | --- |
 | [src/guardian/index.js](../src/guardian/index.js) | The agent loop | `runGuardian(opts)`, `DECISIONS` |
-| [src/guardian/classes.js](../src/guardian/classes.js) | 36 pattern ids → 9 sensitivity classes | `classOf`, `patternIdsFor` |
+| [src/guardian/classes.js](../src/guardian/classes.js) | 44 pattern ids → 9 sensitivity classes | `classOf`, `patternIdsFor` |
 | [src/guardian/state.js](../src/guardian/state.js) | Run memory; drives replanning | `GuardianState`, `STATUS` |
 | [src/guardian/observe.js](../src/guardian/observe.js) | Sensor over `maskText` + `summarize`; metadata only | `observe(path)` |
 | [src/guardian/risk.js](../src/guardian/risk.js) | Contextual score + reason codes | `RiskEngine.assess` |
@@ -382,7 +382,7 @@ GitHub Actions example:
 | 1.2.0 | 2026-09-18 | The Guardian: autonomous release decisions (observe → assess → plan → policy → act → verify → replan), task understanding, value-free audit log |
 | 1.3.0 | 2026-09-23 | `/kakashi` orchestrator picks the tool from intent; 14 commands; agent-guard degrades to polling on Windows |
 | 1.3.1 | 2026-09-23 | `/kakashi` works in agents without native slash commands |
-| **Unreleased** | | **Names by field and column; quoted-key secrets; Luhn, Emirates ID and all-country IBAN checks; linear-time masking; distinct fakes and consistent tokens across files; recursive agent-guard watching on Linux. See [CHANGELOG.md](../CHANGELOG.md).** |
+| **Unreleased** | | **Names by field and column; quoted-key secrets; Luhn, Emirates ID and all-country IBAN checks; linear-time masking; distinct fakes and consistent tokens across files; recursive agent-guard watching on Linux; 8 more credential formats and E.164 phone numbers. See [CHANGELOG.md](../CHANGELOG.md).** |
 
 ---
 

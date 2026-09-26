@@ -364,6 +364,24 @@ function looksLikeHashReference(match, text, idx) {
   return false;
 }
 
+/**
+ * Does this base64 decode to `user:password`? Tells a Basic credential from
+ * the word "basic" followed by a long word.
+ * @param {string} b64
+ */
+function isBasicCredential(b64) {
+  const decoded = Buffer.from(b64, 'base64');
+  if (decoded.toString('base64').replace(/=+$/, '') !== b64.replace(/=+$/, '')) return false;
+  return /^[^\x00-\x1f:]+:[^\x00-\x1f]+$/.test(decoded.toString('utf8'))
+    && !decoded.toString('utf8').includes('\ufffd');
+}
+
+/** A label that says the next number is a phone number. */
+const PHONE_CUE_RX = /\b(?:tel|telephone|phone|mobile|mob|cell|fax|contact|whats ?app)\b|هاتف|جوال|موبايل|فاكس/i;
+
+/** An AWS access key id or an AWS / secret-access-key label. */
+const AWS_SECRET_CUE_RX = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\baws\b|aws_|secret[ \t_-]*access[ \t_-]*key/i;
+
 // ---------------------------------------------------------------------------
 // Context helpers for passport, date and email
 // ---------------------------------------------------------------------------
@@ -703,16 +721,23 @@ const BASE_PATTERNS = [
     label: 'Phone',
     labelAr: 'هاتف',
     cat: 'pii',
-    // Require explicit separators so we don't grab 8-digit substrings out of
-    // tokens / cluster IDs / hostnames. Three accepted shapes:
-    //   intl:   +1-415-555-0188   +44 20 7946 0521   +91-22-2493-1234
-    //   parens: (415) 555-0188
-    //   us:     415-555-0188      415.555.0188       415 555 0188
-    rx: /(?:\+\d{1,3}[ \t.-]\d{1,4}[ \t.-]\d{2,4}[ \t.-]\d{3,4}|\(\d{2,4}\)[ \t]*\d{3}[ \t.-]\d{4}|\b\d{3}[ \t.-]\d{3}[ \t.-]\d{4})\b/g,
+    // Require explicit separators or a leading `+` so we don't grab 8-digit
+    // substrings out of tokens / cluster IDs / hostnames. Accepted shapes:
+    //   intl:     +1-415-555-0188   +44 20 7946 0521   +91-22-2493-1234
+    //   E.164:    +447946095812     +966501234567  (how databases and APIs store them)
+    //   parens:   (415) 555-0188
+    //   us:       415-555-0188      415.555.0188       415 555 0188
+    //   national: 020 7946 0958     0161 496 0000  (trunk 0, 3-4-4 or 4-3-4;
+    //             only after a phone label, see validate)
+    rx: /(?:\+\d{1,3}[ \t.-]\d{1,4}[ \t.-]\d{2,4}[ \t.-]\d{3,4}|(?<![\w+])\+[1-9]\d{7,14}|\(\d{2,4}\)[ \t]*\d{3}[ \t.-]\d{4}|\b\d{3}[ \t.-]\d{3}[ \t.-]\d{4}|\b0(?:\d{2}[ \t.-]\d{4}|\d{3}[ \t.-]\d{3})[ \t.-]\d{4})\b/g,
     validate: (match, text, idx) => {
       const digits = match.replace(/\D/g, '');
       if (digits.length < 9 || digits.length > 15) return false;
       if (/^971/.test(digits)) return false; // covered by intl_phone (UAE)
+      // A national number has no country code to mark it, so `020 7946 0958`
+      // needs a label: account and reference numbers use the same grouping.
+      if (/^0(?:\d{2}[ \t.-]\d{4}|\d{3}[ \t.-]\d{3})[ \t.-]\d{4}$/.test(match)
+        && !PHONE_CUE_RX.test(text.slice(Math.max(0, idx - 40), idx))) return false;
       // Reject when embedded in a longer alphanumeric/digit-hyphen sequence
       // (e.g. inside "acme-prod-9842" or "0125-123456-abcd1234")
       const before = text.slice(Math.max(0, idx - 1), idx);
@@ -816,10 +841,13 @@ const BASE_PATTERNS = [
   },
   {
     id: 'ssh_key',
-    label: 'SSH Private Key',
-    labelAr: 'مفتاح SSH خاص',
+    label: 'Private Key',
+    labelAr: 'مفتاح خاص',
     cat: 'cred',
-    rx: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
+    // PEM and OpenSSH keys, password-protected PKCS#8 (`ENCRYPTED PRIVATE
+    // KEY`), DSA, and PGP secret-key blocks. The END line must name the same
+    // block as the BEGIN line.
+    rx: /-----BEGIN ((?:RSA |EC |DSA |OPENSSH |ENCRYPTED |PGP )?PRIVATE KEY(?: BLOCK)?)-----[\s\S]*?-----END \1-----/g,
     fakeValues: ['-----BEGIN PRIVATE KEY-----\n[REDACTED]\n-----END PRIVATE KEY-----'],
   },
   {
@@ -862,7 +890,9 @@ const BASE_PATTERNS = [
     label: 'GitHub Token',
     labelAr: 'رمز GitHub',
     cat: 'cred',
-    rx: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
+    // Classic tokens (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`) and fine-grained
+    // personal access tokens (`github_pat_`).
+    rx: /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{30,})\b/g,
     fakeValues: ['ghp_abc123def456ghi789jkl012'],
   },
   {
@@ -878,7 +908,8 @@ const BASE_PATTERNS = [
     label: 'Stripe Key',
     labelAr: 'مفتاح Stripe',
     cat: 'cred',
-    rx: /\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{20,}\b/g,
+    // Secret, publishable and restricted keys, and webhook signing secrets.
+    rx: /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{20,}\b|\bwhsec_[A-Za-z0-9+/]{24,}={0,2}/g,
     // Deliberately `sk_test_`, not `sk_live_`, and self-describing.
     //
     // fakeValues are what `--mode fake` writes into a masked file, so they end
@@ -890,12 +921,66 @@ const BASE_PATTERNS = [
     fakeValues: ['sk_test_EXAMPLEplaceholderNOTAREALKEY'],
   },
   {
+    id: 'gitlab_token',
+    label: 'GitLab Token',
+    labelAr: 'رمز GitLab',
+    cat: 'cred',
+    // Personal, deploy, runner, pipeline-trigger, CI-job, feed, OAuth-app and
+    // agent tokens.
+    rx: /\bgl(?:pat|dt|rt|ptt|cbt|ft|oas|soat|imt|agent)-[A-Za-z0-9_-]{20,}/g,
+    fakeValues: [['glpat', 'EXAMPLEplaceholder0KEY'].join('-')],
+  },
+  {
+    id: 'google_api_key',
+    label: 'Google API Key',
+    labelAr: 'مفتاح Google API',
+    cat: 'cred',
+    rx: /\bAIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g,
+    fakeValues: [['AI', 'za', 'EXAMPLE_placeholder_NOT_A_REAL_KEY'.padEnd(35, '0')].join('')],
+  },
+  {
+    id: 'sendgrid_key',
+    label: 'SendGrid Key',
+    labelAr: 'مفتاح SendGrid',
+    cat: 'cred',
+    rx: /\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g,
+    fakeValues: [['SG', 'EXAMPLEplaceholder0000', 'NOTAREALKEY'.padEnd(43, '0')].join('.')],
+  },
+  {
+    id: 'npm_token',
+    label: 'npm Token',
+    labelAr: 'رمز npm',
+    cat: 'cred',
+    rx: /\bnpm_[A-Za-z0-9]{36}\b/g,
+    fakeValues: [['npm', 'EXAMPLEplaceholderNOTAREALKEY'.padEnd(36, '0')].join('_')],
+  },
+  {
+    id: 'slack_webhook',
+    label: 'Slack Webhook',
+    labelAr: 'رابط Slack Webhook',
+    cat: 'cred',
+    // The URL is the credential: anyone holding it can post to the channel.
+    rx: /\bhttps:\/\/hooks\.slack\.com\/(?:services|workflows|triggers)\/[A-Za-z0-9_\/-]{20,}/g,
+    fakeValues: [['https://hooks', 'slack', 'com/services/T00000000/B00000000/EXAMPLEplaceholder000'].join('.')],
+  },
+  {
     id: 'bearer',
     label: 'Bearer Token',
     labelAr: 'رمز Bearer',
     cat: 'cred',
     rx: /\bBearer[ \t]+[A-Za-z0-9._\-+/=]{20,}\b/gi,
     fakeValues: ['Bearer abc123def456ghi789jkl012mno345'],
+  },
+  {
+    id: 'basic_auth',
+    label: 'Basic Auth',
+    labelAr: 'مصادقة Basic',
+    cat: 'cred',
+    // `Authorization: Basic <base64 of user:password>`. Only a value that
+    // decodes to `user:password` counts, so the word "basic" in prose does not.
+    rx: /\bBasic[ \t]+[A-Za-z0-9+/]{8,}={0,2}(?![A-Za-z0-9+/=])/gi,
+    validate: (match) => isBasicCredential(match.replace(/^Basic[ \t]+/i, '')),
+    fakeValues: [`Basic ${Buffer.from('example:not-a-real-password').toString('base64')}`],
   },
   {
     id: 'db_conn',
@@ -948,6 +1033,33 @@ const BASE_PATTERNS = [
     cat: 'cred',
     rx: /\bs3:\/\/[A-Za-z0-9._\-]+(?:\/[^\s"'<>]*)?/g,
     fakeValues: ['s3://example-bucket/path'],
+  },
+  {
+    id: 'azure_storage_key',
+    label: 'Azure Storage Key',
+    labelAr: 'مفتاح تخزين Azure',
+    cat: 'cred',
+    // The account key or shared access key inside an Azure connection string:
+    // `...;AccountName=acct;AccountKey=<base64>;EndpointSuffix=...`. Only the
+    // key is replaced, so the connection string stays readable.
+    rx: /\b(?:AccountKey|SharedAccessKey)[ \t]*=[ \t]*([A-Za-z0-9+/]{20,}={0,2})/g,
+    valueGroups: [1],
+    fakeValues: ['EXAMPLEplaceholderNOTAREALKEY'.padEnd(86, '0') + '=='],
+  },
+  {
+    id: 'aws_secret',
+    label: 'AWS Secret Key',
+    labelAr: 'مفتاح AWS السري',
+    cat: 'cred',
+    // A secret access key is 40 characters of base64 with nothing to mark it,
+    // so it counts only near an access key id or an AWS / secret-access-key
+    // label -- the credentials CSV the console downloads puts it right after
+    // the key id, with the header on the line above.
+    rx: /(?<![A-Za-z0-9/+=])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])/g,
+    validate: (match, text, idx) => /[A-Z]/.test(match) && /[a-z]/.test(match) && /\d/.test(match)
+      && !/^\/|\/$|\/\//.test(match)
+      && AWS_SECRET_CUE_RX.test(text.slice(Math.max(0, idx - 200), idx)),
+    fakeValues: ['wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'],
   },
   {
     id: 'env_secret',
@@ -1025,11 +1137,16 @@ const BASE_PATTERNS = [
     label: 'Hex Secret',
     labelAr: 'سر Hex',
     cat: 'cred',
-    rx: /\b[a-fA-F0-9]{40,}\b/g,
+    rx: /\b[a-fA-F0-9]{32,}\b/g,
     // A git commit is 40 hex characters and a SHA-256 checksum 64, so without
     // context every changelog, lockfile and CI log read as a credential -- and
     // the Guardian then demanded human approval for a harmless file.
-    validate: (match, text, idx) => /[a-fA-F]/.test(match) && !looksLikeHashReference(match, text, idx),
+    // 32 to 39 characters is also an MD5, a UUID without dashes or a request
+    // id, so a key that short counts only after a key word on its line
+    // (`api_key: 5d41...`, `X-Api-Token: ...`).
+    validate: (match, text, idx) => /[a-fA-F]/.test(match)
+      && (match.length >= 40 || HEX_SECRET_CUE_RX.test(linePrefix(text, idx, 48)))
+      && !looksLikeHashReference(match, text, idx),
     fakeValues: ['a1b2c3d4e5f6789012345678901234567890abcd'],
   },
 ];

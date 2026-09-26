@@ -39,7 +39,7 @@ Kakashi started as a masker you invoke. As of **v1.3.1 it has three protection l
 
 | Layer | What it does | Commands |
 | --- | --- | --- |
-| **1 · The engine** | 36 detection patterns (credentials, government IDs, financial, contact, names) across 50+ file formats. Finds a secret, replaces it, and rebuilds the file in its original format — a real `.docx` back, not a text dump. | `scan` `mask` `audit` |
+| **1 · The engine** | 44 detection patterns (credentials, government IDs, financial, contact, names) across 50+ file formats. Finds a secret, replaces it, and rebuilds the file in its original format — a real `.docx` back, not a text dump. | `scan` `mask` `audit` |
 | **2 · The reach** | The same engine pointed at things bigger than one file: a whole repository or shared drive, and live databases queried and masked **client-side**. | `scan-dir` `mask-dir` `db-scan` `db-mask` `db-audit` |
 | **3 · The Guardian** | Guardrails. You hand it a file, the agent asking for it, and what that agent says it needs it for. It observes, assesses risk, plans the *minimum necessary* protection, acts, **re-checks its own output**, and replans if the result is still unsafe. It returns a decision, not just a file. | `guard` `agent-guard` |
 
@@ -58,7 +58,7 @@ Kakashi started as a masker you invoke. As of **v1.3.1 it has three protection l
         └────────────────────┬───────────────────────┘
                              │ uses
         ┌──────────── layer 1 · ENGINE ──────────────┐
-        │  36 patterns · 50+ formats · 3 mask modes  │
+        │  44 patterns · 50+ formats · 3 mask modes  │
         └────────────────────────────────────────────┘
 
                  all of it, on your machine, offline
@@ -383,7 +383,7 @@ DECISION
 
 | Input | Values |
 | --- | --- |
-| **Sensitivity classes** (9) | `CREDENTIAL` · `GOVERNMENT_IDENTIFIER` · `FINANCIAL` · `CONTACT` · `PERSON_NAME` · `QUASI_IDENTIFIER` · `TECHNICAL_IDENTIFIER` · `BUSINESS_ATTRIBUTE` · `LOCATION` — all 36 patterns are mapped, and a drift guard fails CI if a new pattern ships unclassified |
+| **Sensitivity classes** (9) | `CREDENTIAL` · `GOVERNMENT_IDENTIFIER` · `FINANCIAL` · `CONTACT` · `PERSON_NAME` · `QUASI_IDENTIFIER` · `TECHNICAL_IDENTIFIER` · `BUSINESS_ATTRIBUTE` · `LOCATION` — all 44 patterns are mapped, and a drift guard fails CI if a new pattern ships unclassified |
 | **Agent trust** (`--agent`) | `claude` `cursor` `codex` `windsurf` `cline` `copilot` `continue` `local_model`, and a deliberately conservative `unknown` default |
 | **Destination** (`--destination`) | `local` · `local_model` · `known_external` · `external_model` · `unknown` |
 | **Policy** (`--policy`) | Per (policy, destination): `denyOutright` (immediate BLOCK) · `prohibited` (must not be detectable in the output) · `restricted` · `requiresApproval` · `allowedTransforms` (caps which tools the planner may pick) |
@@ -645,7 +645,7 @@ Docs        .md  .rst  .txt  .log
 
 ## What Kakashi Catches
 
-36 active patterns. `kakashi list-patterns` prints every one.
+44 active patterns. `kakashi list-patterns` prints every one.
 
 ### Credentials
 
@@ -653,20 +653,28 @@ Docs        .md  .rst  .txt  .log
 OpenAI Key         sk-proj-aBcDeF...       →  [OPENAI_KEY_1]
 Anthropic Key      sk-ant-api03-...        →  [ANTHROPIC_1]
 AWS Key            AKIAIOSFODNN7EXAMPLE    →  [AWS_KEY_1]
-GitHub Token       ghp_aBcDeFgHiJ...       →  [GH_TOKEN_1]
-Stripe Key         sk_live_aBcDeF...       →  [STRIPE_1]
+GitHub Token       ghp_aBcDeFgHiJ...       →  [GH_TOKEN_1]         ← also fine-grained github_pat_
+GitLab Token       glpat-aBcDeFgHiJ...     →  [GITLAB_TOKEN_1]
+Google API Key     AIzaSyAbCdEfGh...       →  [GOOGLE_API_KEY_1]
+Stripe Key         sk_live_aBcDeF...       →  [STRIPE_1]           ← also rk_ restricted keys and whsec_ webhook secrets
+SendGrid Key       SG.aBcDeFgHiJ...        →  [SENDGRID_KEY_1]
+npm Token          npm_aBcDeFgHiJ...       →  [NPM_TOKEN_1]
 Slack Token        xoxb-123456-...         →  [SLACK_1]
+Slack Webhook      https://hooks.slack...  →  [SLACK_WEBHOOK_1]
+Azure Storage Key  AccountKey=aBcD...==    →  AccountKey=[AZURE_STORAGE_KEY_1]
+AWS Secret Key     wJalrXUtnFEMI/K7MD...   →  [AWS_SECRET_1]       ← only next to a key id or an AWS label
 HuggingFace        hf_aBcDeFgHiJ...        →  [HF_TOKEN_1]
 Databricks Token   dapi1234567890abcdef... →  [DATABRICKS_TOKEN_1]
 Databricks Host    https://dbc-a1b2...     →  [DATABRICKS_HOST_1]
 S3 URI             s3://prod-bucket/...    →  [S3_URI_1]
 JWT Token          eyJhbGciOiJIUzI1...     →  [JWT_1]
 Bearer Token       Bearer eyJhbGci...      →  [BEARER_1]
+Basic Auth         Basic YWRtaW46...       →  [BASIC_AUTH_1]       ← only when it decodes to user:password
 DB Connection      postgresql://user:p...  →  [DB_CONN_1]
 SQL Password       IDENTIFIED BY 'S3cr...  →  IDENTIFIED BY [SQL_PASSWORD_1]
-SSH Private Key    -----BEGIN RSA...       →  [SSH_KEY_1]
+Private Key        -----BEGIN RSA...       →  [SSH_KEY_1]          ← RSA, EC, DSA, OpenSSH, encrypted PKCS#8, PGP
 ENV Secret         API_KEY=abc123...       →  [ENV_SECRET_1]
-Hex Secret         a1b2c3d4e5f6... (40+)   →  [HEX_SECRET_1]
+Hex Secret         a1b2c3d4e5f6... (40+)   →  [HEX_SECRET_1]       ← 32+ after a key word (api_key: ...)
 ```
 
 ### Identity & personal info
@@ -682,7 +690,7 @@ Trade License      CN-1234567              →  [TRADE_LIC_1]
 P.O. Box           P.O. Box 12345          →  [POBOX_1]
 Email              user@example.com        →  [EMAIL_1]
 UAE Phone          +971-50-123-4567        →  [INTL_PHONE_1]
-Phone              +1-415-555-0188         →  [PHONE_1]
+Phone              +1-415-555-0188         →  [PHONE_1]            ← also E.164 (+447946095812)
 IP Address         10.128.3.4              →  [IP_1]
 Credit Card        4111 1111 1111 1111     →  [CC_1]               ← Luhn-verified
 SSN / National ID  123-45-6789             →  [SSN_1]
@@ -767,7 +775,7 @@ Agentic
 Info
   kakashi stats                 Cumulative masking stats
   kakashi impact                Privacy-preserving impact snapshot (never auto-submitted)
-  kakashi list-patterns         All 36 active detection patterns
+  kakashi list-patterns         All 44 active detection patterns
 
 Global flags
   --mode typed|redact|fake      Replacement style (default: typed)

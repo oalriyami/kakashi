@@ -29,6 +29,25 @@ to 3.
   `[FULL_NAME_n]` tokens, so the Guardian's classes are unchanged.
 - **Name benchmark in CI** ([tests/names.test.js](tests/names.test.js)).
   Recall and false alarms are asserted against floors that may only rise.
+- **Eight more credential formats** (#5). New patterns: `gitlab_token`
+  (`glpat-` and the other GitLab prefixes), `google_api_key` (`AIza…`),
+  `sendgrid_key` (`SG.….…`), `npm_token` (`npm_…`), `slack_webhook`
+  (`https://hooks.slack.com/services/…`), `azure_storage_key` (only the key in
+  `AccountKey=` / `SharedAccessKey=`, so the connection string stays readable),
+  `basic_auth` (`Basic <base64>`, only when it decodes to `user:password`) and
+  `aws_secret` (a 40-character secret access key, only near an access key id or
+  an AWS / secret-access-key label, as in the console's credentials CSV).
+  Existing patterns now also cover fine-grained GitHub tokens (`github_pat_`),
+  Stripe restricted keys and webhook secrets (`rk_live_`, `whsec_`), encrypted
+  PKCS#8, DSA and PGP private-key blocks (`ssh_key`, now labelled Private Key),
+  and 32–39-character hex keys after a key word (`api_key: 5d41…`). There are
+  now 44 patterns, all classified `CREDENTIAL` and cited under PDPL Art. 20
+  and 21.
+- **Phone numbers without separators** (#11). `phone` accepts E.164
+  (`+447946095812`, `+966501234567`), the form databases and APIs store, and
+  national numbers grouped 3-4-4 or 4-3-4 (`020 7946 0958`) after a phone label
+  (`tel`, `phone`, `mobile`, `هاتف`, …). Timestamps and order numbers, which
+  have no `+`, stay unflagged.
 
 ### Changed
 

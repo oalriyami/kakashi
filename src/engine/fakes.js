@@ -110,6 +110,7 @@ const GENERATORS = {
   databricks_host: (n) => `https://dbc-${pad(n % 1e6, 6)}.cloud.databricks.com`,
   s3_uri: (n) => `s3://example-bucket-${n}/path`,
   env_secret: (n) => (n === 1 ? 'fake_env_secret' : `fake_env_secret_${n}`),
+  basic_auth: (n) => `Basic ${Buffer.from(`example${n}:not-a-real-password`).toString('base64')}`,
 };
 
 /** dd/mm/yyyy, distinct for n below 28 * 12 * 70. */
