@@ -82,6 +82,9 @@ function maskText(text, options = {}) {
       }
     }
 
+    // A detect-only pattern (`iban`) has no regex of its own.
+    if (!pattern.rx) continue;
+
     // `d` (hasIndices) exposes each capture group's absolute offset, which is
     // how a pattern can match a wide context but replace only part of it.
     const flags = pattern.valueGroups && !pattern.rx.flags.includes('d')

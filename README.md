@@ -39,7 +39,7 @@ Kakashi started as a masker you invoke. As of **v1.3.1 it has three protection l
 
 | Layer | What it does | Commands |
 | --- | --- | --- |
-| **1 · The engine** | 35 detection patterns (credentials, government IDs, financial, contact, names) across 50+ file formats. Finds a secret, replaces it, and rebuilds the file in its original format — a real `.docx` back, not a text dump. | `scan` `mask` `audit` |
+| **1 · The engine** | 36 detection patterns (credentials, government IDs, financial, contact, names) across 50+ file formats. Finds a secret, replaces it, and rebuilds the file in its original format — a real `.docx` back, not a text dump. | `scan` `mask` `audit` |
 | **2 · The reach** | The same engine pointed at things bigger than one file: a whole repository or shared drive, and live databases queried and masked **client-side**. | `scan-dir` `mask-dir` `db-scan` `db-mask` `db-audit` |
 | **3 · The Guardian** | Guardrails. You hand it a file, the agent asking for it, and what that agent says it needs it for. It observes, assesses risk, plans the *minimum necessary* protection, acts, **re-checks its own output**, and replans if the result is still unsafe. It returns a decision, not just a file. | `guard` `agent-guard` |
 
@@ -58,7 +58,7 @@ Kakashi started as a masker you invoke. As of **v1.3.1 it has three protection l
         └────────────────────┬───────────────────────┘
                              │ uses
         ┌──────────── layer 1 · ENGINE ──────────────┐
-        │  35 patterns · 50+ formats · 3 mask modes  │
+        │  36 patterns · 50+ formats · 3 mask modes  │
         └────────────────────────────────────────────┘
 
                  all of it, on your machine, offline
@@ -383,7 +383,7 @@ DECISION
 
 | Input | Values |
 | --- | --- |
-| **Sensitivity classes** (9) | `CREDENTIAL` · `GOVERNMENT_IDENTIFIER` · `FINANCIAL` · `CONTACT` · `PERSON_NAME` · `QUASI_IDENTIFIER` · `TECHNICAL_IDENTIFIER` · `BUSINESS_ATTRIBUTE` · `LOCATION` — all 35 patterns are mapped, and a drift guard fails CI if a new pattern ships unclassified |
+| **Sensitivity classes** (9) | `CREDENTIAL` · `GOVERNMENT_IDENTIFIER` · `FINANCIAL` · `CONTACT` · `PERSON_NAME` · `QUASI_IDENTIFIER` · `TECHNICAL_IDENTIFIER` · `BUSINESS_ATTRIBUTE` · `LOCATION` — all 36 patterns are mapped, and a drift guard fails CI if a new pattern ships unclassified |
 | **Agent trust** (`--agent`) | `claude` `cursor` `codex` `windsurf` `cline` `copilot` `continue` `local_model`, and a deliberately conservative `unknown` default |
 | **Destination** (`--destination`) | `local` · `local_model` · `known_external` · `external_model` · `unknown` |
 | **Policy** (`--policy`) | Per (policy, destination): `denyOutright` (immediate BLOCK) · `prohibited` (must not be detectable in the output) · `restricted` · `requiresApproval` · `allowedTransforms` (caps which tools the planner may pick) |
@@ -645,7 +645,7 @@ Docs        .md  .rst  .txt  .log
 
 ## What Kakashi Catches
 
-35 active patterns. `kakashi list-patterns` prints every one.
+36 active patterns. `kakashi list-patterns` prints every one.
 
 ### Credentials
 
@@ -672,11 +672,12 @@ Hex Secret         a1b2c3d4e5f6... (40+)   →  [HEX_SECRET_1]
 ### Identity & personal info
 
 ```
-Emirates ID        784-1990-1234567-1      →  [NATIONAL_ID_1]      ← checksum-verified
+Emirates ID        784-1990-1234567-1      →  [NATIONAL_ID_1]      ← checksum-verified; also with spaces or no dashes
 Passport           AB1234567               →  [PASSPORT_1]
 Visa Number        123/2020/1234567        →  [VISA_ID_1]
 Unified ID         1234567890              →  [UNIFIED_ID_1]
 UAE IBAN           AE070331234567890123    →  [UAE_IBAN_1]         ← mod-97 verified
+IBAN (other)       GB82 WEST 1234 5698...  →  [IBAN_1]             ← mod-97 + country length verified
 Trade License      CN-1234567              →  [TRADE_LIC_1]
 P.O. Box           P.O. Box 12345          →  [POBOX_1]
 Email              user@example.com        →  [EMAIL_1]
@@ -766,7 +767,7 @@ Agentic
 Info
   kakashi stats                 Cumulative masking stats
   kakashi impact                Privacy-preserving impact snapshot (never auto-submitted)
-  kakashi list-patterns         All 35 active detection patterns
+  kakashi list-patterns         All 36 active detection patterns
 
 Global flags
   --mode typed|redact|fake      Replacement style (default: typed)

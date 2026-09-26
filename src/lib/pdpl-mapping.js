@@ -92,6 +92,7 @@ const PATTERN_TO_ARTICLES = {
   non_latin_name: ['Art. 1', 'Art. 5'],
   unified_id:     ['Art. 1', 'Art. 15', 'Art. 22'],
   uae_iban:       ['Art. 1', 'Art. 15', 'Art. 20', 'Art. 22'],
+  iban:           ['Art. 1', 'Art. 15', 'Art. 20', 'Art. 22'],
   // ---- Personal Info -------------------------------------------------------
   email:          ['Art. 1', 'Art. 5', 'Art. 22'],
   phone:          ['Art. 1', 'Art. 5', 'Art. 22'],
@@ -139,6 +140,7 @@ const SEVERITY = {
   visa_id:          'critical',
   unified_id:       'critical',
   uae_iban:         'critical',
+  iban:             'critical',
   ssn:              'critical',
   cc:               'critical',
   jwt:              'critical',
@@ -188,7 +190,7 @@ function enrich(finding) {
   let checksumVerified = null; // null = not applicable
   if (finding.id === 'national_id') {
     checksumVerified = isValidEmiratesId(finding.original);
-  } else if (finding.id === 'uae_iban') {
+  } else if (finding.id === 'uae_iban' || finding.id === 'iban') {
     checksumVerified = isValidIban(finding.original);
   }
 

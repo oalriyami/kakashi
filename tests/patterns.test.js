@@ -17,6 +17,29 @@ const cases = [
   { id: 'uae_iban', input: 'IBAN AE070331234567890123456', shouldMatch: true },
   { id: 'uae_iban', input: 'IBAN AE07 0331 2345 6789 0123 456', shouldMatch: true },
   { id: 'uae_iban', input: 'IBAN GB29NWBK60161331926819', shouldMatch: false }, // UK IBAN, not UAE
+  // Credit cards need a Luhn check digit, and a bare digit run a network prefix (issue #6)
+  { id: 'cc', input: 'card 4111 1111 1111 1111', shouldMatch: true },
+  { id: 'cc', input: '4111111111111111', shouldMatch: true },
+  { id: 'cc', input: 'Amex 3782 822463 10005', shouldMatch: true },
+  { id: 'cc', input: 'card 4111-1111-1111-1112', shouldMatch: false }, // fails Luhn
+  { id: 'cc', input: '{"created_at": 1727366400000}', shouldMatch: false }, // ms timestamp
+  { id: 'cc', input: 'Order #4000123456789 shipped', shouldMatch: false },
+  { id: 'cc', input: '784198812345670', shouldMatch: false }, // an Emirates ID, not a card
+  // Emirates ID with spaces or no separator (issue #10)
+  { id: 'national_id', input: 'EID 784 1990 1234567 1', shouldMatch: true },
+  { id: 'national_id', input: 'EID 784199012345671', shouldMatch: true },
+  { id: 'national_id', input: 'رقم الهوية: 784199012345671', shouldMatch: true },
+  { id: 'national_id', input: 'ref 784198812345670', shouldMatch: true }, // passes the checksum
+  { id: 'national_id', input: 'ref 784199012345671', shouldMatch: false }, // no checksum, no label
+  { id: 'national_id', input: 'ref 784-1990 1234567-1', shouldMatch: false }, // mixed separators
+  // IBANs from every other country (issue #9)
+  { id: 'iban', input: 'IBAN SA0380000000608010167519', shouldMatch: true },
+  { id: 'iban', input: 'IBAN GB29 NWBK 6016 1331 9268 19', shouldMatch: true },
+  { id: 'iban', input: 'DE89 3704 0044 0532 0130 00', shouldMatch: true },
+  { id: 'iban', input: 'FR14 2004 1010 0505 0001 3M02 606', shouldMatch: true },
+  { id: 'iban', input: 'GB82WEST12345698765433', shouldMatch: false }, // bad checksum
+  { id: 'iban', input: 'XX82WEST12345698765432', shouldMatch: false }, // not an IBAN country
+  { id: 'iban', input: 'AE070331234567890123456', shouldMatch: false }, // left to uae_iban
   { id: 'non_latin_name', input: 'العميل محمد أحمد المنصوري', shouldMatch: true },
   { id: 'email', input: 'user@example.com', shouldMatch: true },
   { id: 'email', input: 'not an email', shouldMatch: false },
@@ -82,6 +105,25 @@ function runPatternTests() {
     }
   }
 
+  // An IBAN's span ends at its country's length, not at the next word (issue #9),
+  // and a no-dash Emirates ID is classed as an ID, not as a card (issue #10).
+  {
+    const spans = [
+      ['GB82 WEST 1234 5698 7654 32 USD', 'iban', 'GB82 WEST 1234 5698 7654 32'],
+      ['pay GB82WEST12345698765432.', 'iban', 'GB82WEST12345698765432'],
+      ['EID 784198812345670', 'national_id', '784198812345670'],
+    ];
+    for (const [text, id, want] of spans) {
+      const got = maskText(text).findings.map((f) => `${f.id}:${f.original}`);
+      if (got.length === 1 && got[0] === `${id}:${want}`) {
+        passed++;
+      } else {
+        console.error(`FAIL span ${JSON.stringify(text)}: expected ${id}:${want}, got ${JSON.stringify(got)}`);
+        failed++;
+      }
+    }
+  }
+
   // Overlap test
   const overlap = maskText('john.5551234567@example.com', { enabled: ['email', 'phone'] });
   if (overlap.findings.length >= 1) {
@@ -140,7 +182,7 @@ function runPatternTests() {
   // -------------------------------------------------------------------------
   const MULTILINE_BY_DESIGN = new Set(['ssh_key']);
   for (const p of PATTERNS) {
-    if (MULTILINE_BY_DESIGN.has(p.id)) continue;
+    if (MULTILINE_BY_DESIGN.has(p.id) || !p.rx) continue;
     // Strip character classes that legitimately contain \s as a NEGATED
     // terminator (e.g. [^\s"'<>]) and the env_secret leading lookbehind, which
     // must allow a newline before a KEY.

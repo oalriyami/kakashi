@@ -338,6 +338,78 @@ function looksLikeHashReference(match, text, idx) {
 }
 
 // ---------------------------------------------------------------------------
+// Identifier helpers: card prefixes, Emirates ID labels, IBAN detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Issuer prefixes of the card networks: Visa 4; Mastercard 51-55 and
+ * 2221-2720; Mir 2200-2204; Amex 34/37; Diners 30/36/38/39; JCB 35;
+ * Maestro 50/56-58/6x; Discover and UnionPay 6x. Nothing starts with 1, 7, 8,
+ * 9 or 0 -- which rules out timestamps and 784-prefixed Emirates IDs.
+ */
+const CARD_PREFIX_RX = /^(?:4|5[0-8]|2(?:2[2-9]|[3-6]\d|7[0-2])|220[0-4]|3[0-9]|6)/;
+
+/** A label just before a bare 15-digit number that says it is an Emirates ID. */
+const EMIRATES_ID_CUE_RX = /(?:emirates[ \t_-]*id|\beid\b|national[ \t_-]*id|\bid[ \t_-]*(?:no|number|#)|رقم[ \t]*الهوية|الهوية|هوية)[^\n]{0,12}$/i;
+
+/**
+ * IBAN length per country (ISO 13616 registry). Every country's IBAN has one
+ * fixed length, which pins down where an IBAN ends: mod-97 alone passes about
+ * 1 in 97 strings, so `GB82 WEST ... 32 USD` would also "pass" with the trailing
+ * word included.
+ */
+const IBAN_LENGTHS = {
+  AD: 24, AE: 23, AL: 28, AT: 20, AZ: 28, BA: 20, BE: 16, BG: 22, BH: 22, BR: 29,
+  BY: 28, CH: 21, CR: 22, CY: 28, CZ: 24, DE: 22, DK: 18, DO: 28, EE: 20, EG: 29,
+  ES: 24, FI: 18, FO: 18, FR: 27, GB: 22, GE: 22, GI: 23, GL: 18, GR: 27, GT: 28,
+  HR: 21, HU: 28, IE: 22, IL: 23, IQ: 23, IS: 26, IT: 27, JO: 30, KW: 30, KZ: 20,
+  LB: 28, LC: 32, LI: 21, LT: 20, LU: 20, LV: 21, LY: 25, MC: 27, MD: 24, ME: 22,
+  MK: 19, MR: 27, MT: 31, MU: 30, NL: 18, NO: 15, OM: 23, PK: 24, PL: 28, PS: 29,
+  PT: 25, QA: 29, RO: 24, RS: 22, SA: 24, SC: 31, SD: 18, SE: 24, SI: 19, SK: 24,
+  SM: 27, ST: 25, SV: 28, TL: 23, TN: 24, TR: 26, UA: 29, VA: 22, VG: 24, XK: 20,
+};
+
+/**
+ * Find IBANs from any country except the UAE (see `uae_iban`).
+ *
+ * A candidate is two letters, two check digits and more alphanumerics,
+ * optionally grouped by single spaces. The IBAN is the prefix that ends at a
+ * word boundary, has exactly its country's registered length, and passes the
+ * mod-97 checksum -- so a trailing word such as `USD` is left out.
+ *
+ * @param {string} text
+ * @returns {Array<{ start: number, end: number, original: string }>}
+ */
+function detectIbans(text) {
+  const out = [];
+  const rx = /\b[A-Z]{2}\d{2}(?:[ \t]?[A-Z0-9]){11,40}/g;
+  let m;
+  while ((m = rx.exec(text)) !== null) {
+    const run = m[0];
+    let found = null;
+    for (let end = run.length; end >= 15 && !found; end--) {
+      const atBoundary = end === run.length || /[ \t]/.test(run[end]);
+      if (!atBoundary || /[ \t]/.test(run[end - 1])) continue;
+      const after = text[m.index + end] || '';
+      if (/[A-Za-z0-9]/.test(after) && end === run.length) continue; // glued to more text
+      const candidate = run.slice(0, end);
+      const compact = candidate.replace(/[ \t]/g, '');
+      const country = compact.slice(0, 2);
+      if (country !== 'AE' && compact.length === IBAN_LENGTHS[country] && isValidIban(compact)) {
+        found = candidate;
+      }
+    }
+    if (found) {
+      out.push({ start: m.index, end: m.index + found.length, original: found });
+      rx.lastIndex = m.index + found.length;
+    } else {
+      rx.lastIndex = m.index + 2;
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Checksum helpers
 //
 // These are exported as reusable primitives. They are NOT wired into the
@@ -428,10 +500,19 @@ const BASE_PATTERNS = [
     label: 'Emirates ID',
     labelAr: 'الهوية الإماراتية',
     cat: 'id',
-    // Emirates ID format: 784-YYYY-NNNNNNN-D.
-    // For compliance-strict deployments the reporter (A2/A5) can additionally
-    // apply `isValidEmiratesId(match)` to badge findings as checksum-verified.
-    rx: /\b784-\d{4}-\d{7}-\d\b/g,
+    // Emirates ID: 784-YYYY-NNNNNNN-D, also written with spaces or with no
+    // separator at all (the usual form in databases). The separator must be the
+    // same throughout.
+    //
+    // The dashed form is the printed format and stays lenient: a transposed
+    // digit is still worth flagging. The other two forms are only 15 digits
+    // starting 784, so they need the Emirates ID checksum or a nearby label.
+    // The reporter (A2/A5) badges any finding that passes `isValidEmiratesId`
+    // as checksum-verified.
+    rx: /\b784([ -]?)\d{4}\1\d{7}\1\d\b/g,
+    validate: (match, text, idx) => match.includes('-')
+      || isValidEmiratesId(match)
+      || EMIRATES_ID_CUE_RX.test(text.slice(Math.max(0, idx - 32), idx)),
     fakeValues: ['784-1990-9999999-0', '784-1985-1234567-1'],
   },
   {
@@ -522,6 +603,18 @@ const BASE_PATTERNS = [
     fakeValues: ['AE070331234567890123456'],
     // Strict-mode reporters may additionally call isValidIban(match).
   },
+  {
+    id: 'iban',
+    label: 'IBAN',
+    labelAr: 'رقم آيبان',
+    cat: 'id',
+    // Every other country's IBAN (Saudi, GCC, UK, EU, ...); `uae_iban` keeps
+    // AE. Found by detectIbans() rather than a regex alone, because a grouped
+    // IBAN followed by a short word (`... 3210 USD`) would otherwise be matched
+    // together with the word, fail its checksum and be missed.
+    detect: detectIbans,
+    fakeValues: ['GB82WEST12345698765432', 'SA0380000000608010167519'],
+  },
   // ---- Personal Info -------------------------------------------------------
   {
     id: 'email',
@@ -570,9 +663,14 @@ const BASE_PATTERNS = [
     cat: 'pii',
     // Visa/MC/Discover (4-4-4-4) | Amex (4-6-5) | continuous 13-19 digits
     rx: /\b(?:\d{4}[ \t-]?){3}\d{4}\b|\b\d{4}[ \t-]\d{6}[ \t-]\d{5}\b|\b\d{13,19}\b/g,
+    // Card numbers carry a Luhn check digit; without it every 13-19 digit
+    // number (millisecond timestamps, order ids) was a "card". A run of digits
+    // with no separators must also start like a card network's number.
     validate: (match) => {
       const digits = match.replace(/\D/g, '');
-      return digits.length >= 13 && digits.length <= 19;
+      if (digits.length < 13 || digits.length > 19) return false;
+      if (!luhnCheck(digits)) return false;
+      return !/^\d+$/.test(match) || CARD_PREFIX_RX.test(digits);
     },
     fakeValues: ['4111-1111-1111-1111'],
   },

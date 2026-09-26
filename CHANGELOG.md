@@ -79,6 +79,21 @@ to 3.
   set up as skipped with the reason, instead of doing nothing (Cline and
   Copilot without `--with-init`) or printing `[ok]` without writing anything
   (Windsurf without `~/.windsurf`).
+- **Credit cards need a Luhn check digit** (#6). The `cc` pattern accepted any
+  13-19 digit number, so millisecond timestamps and order numbers were masked
+  as cards (class `FINANCIAL`). It now requires a valid Luhn check digit, and a
+  run of digits with no separators must also start with a card network's
+  prefix. The README's "Luhn-verified" note is now true.
+- **Emirates IDs are detected with spaces or no separators** (#10).
+  `784 1990 1234567 1` was missed and `784199012345671` was detected only as a
+  credit card, with the wrong class, PDPL articles and token. Both are now
+  `national_id` when they pass the Emirates ID checksum or follow a label
+  (`EID`, `Emirates ID`, `رقم الهوية`, ...). The dashed form stays lenient.
+- **IBANs from every country** (#9). A new `iban` pattern (class `FINANCIAL`)
+  covers Saudi, GCC, UK, EU and other IBANs; `uae_iban` keeps `AE`. Matches
+  must pass mod-97 and have their country's registered length, which also
+  stops a trailing word (`... 32 USD`) from being swallowed into the match.
+  There are now 36 patterns.
 - **Masking is linear in file size** (#13). `maskText()` recounted lines from
   the start of the text for every finding and rebuilt the whole string for
   every replacement, so 8,000 JSON lines took ~6 s with one pattern and a

@@ -46,6 +46,7 @@ const PATTERN_TO_CLASS = {
 
   // --- Financial instruments ----------------------------------------------
   uae_iban: 'FINANCIAL',
+  iban: 'FINANCIAL',
   cc:       'FINANCIAL',
 
   // --- Contact handles -----------------------------------------------------
