@@ -79,6 +79,12 @@ to 3.
   set up as skipped with the reason, instead of doing nothing (Cline and
   Copilot without `--with-init`) or printing `[ok]` without writing anything
   (Windsurf without `~/.windsurf`).
+- **Masking is linear in file size** (#13). `maskText()` recounted lines from
+  the start of the text for every finding and rebuilt the whole string for
+  every replacement, so 8,000 JSON lines took ~6 s with one pattern and a
+  5,000-row CSV ~8 s with all patterns. Both now happen in one forward pass:
+  16 ms and 123 ms respectively. Output is byte-for-byte identical, including
+  line numbers; a test guards against a quadratic regression.
 - **Masking a short name no longer corrupts longer words.** The xlsx, docx and
   pptx writers replaced every masked value as a plain substring, so masking
   `Ali` would have rewritten `Alignment`. Name-like values are now replaced as

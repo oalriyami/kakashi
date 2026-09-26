@@ -140,25 +140,37 @@ function maskText(text, options = {}) {
     }
   }
 
-  const findings = resolved.map((match) => {
+  // `resolved` is sorted by offset and non-overlapping, so one forward pass
+  // both numbers the lines and assembles the output. Doing either per finding
+  // -- recounting newlines from the start of the text, or rebuilding the whole
+  // string for each replacement -- made masking quadratic in file size: 8,000
+  // JSON lines took ~6 s with a single pattern enabled (issue #13).
+  const findings = [];
+  const parts = [];
+  let line = 1;
+  let nextNewline = text.indexOf('\n'); // first newline not yet counted
+  let copied = 0;                       // text is copied into `parts` up to here
+  for (const match of resolved) {
     const replacement = getReplacement(match, mode, valueMap, counters);
-    return {
+    while (nextNewline !== -1 && nextNewline < match.start) {
+      line++;
+      nextNewline = text.indexOf('\n', nextNewline + 1);
+    }
+    findings.push({
       id: match.id,
       label: match.label,
       labelAr: match.labelAr,
       cat: match.cat,
       original: match.original,
       replacement,
-      line: lineAtOffset(text, match.start),
+      line,
       offset: match.start,
-    };
-  });
-
-  let masked = text;
-  const sorted = [...findings].sort((a, b) => b.offset - a.offset);
-  for (const f of sorted) {
-    masked = masked.slice(0, f.offset) + f.replacement + masked.slice(f.offset + f.original.length);
+    });
+    parts.push(text.slice(copied, match.start), replacement);
+    copied = match.start + match.original.length;
   }
+  parts.push(text.slice(copied));
+  const masked = parts.join('');
 
   return { masked, findings };
 }
