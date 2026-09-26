@@ -217,6 +217,29 @@ function runPatternTests() {
     ['# PASSWORD is required', false],
     ['TOKENIZER=bpe', false],
     ['HF_TOKENIZER=gpt2', false],
+    // Quoted keys, XML, PHP and command-line flags (issue #3). Each of these
+    // used to be missed because the key had to follow whitespace or `,;({[`.
+    ['{"password": "hunter2prod"}', true],
+    ['{"db": {"password": "hunter2prod"}}', true],
+    ['"password":"hunter2prod"', true],
+    ["{'password': 'hunter2prod'}", true],
+    ['  "client_secret": "abc123secretvalue",', true],
+    ['<password>hunter2prod</password>', true],
+    ['<Password>hunter2prod</Password>', true],
+    ['<add key="ApiKey" value="abc123secretvalue"/>', true],
+    ['<setting name="DbPassword" value="hunter2prod" />', true],
+    ['$password = "hunter2prod";', true],
+    ['mysql --password=hunter2prod -u root', true],
+    ['echo "TOKEN=abc123xyz"', true],
+    // ...without new false alarms
+    ['{"password": ""}', false],
+    ['{"password": null}', false],
+    ['{"token": true}', false],
+    ['{"passwordPolicy": {"minLength": 8}}', false],
+    ['{"X-Signature": HMAC_SECRET}', false], // a variable reference in code
+    ['<password></password>', false],
+    ['<password>[ENV_SECRET_1]</password>', false], // already masked
+    ['<add key="ApiKey" value="[ENV_SECRET_1]"/>', false],
   ];
   for (const [text, shouldMatch] of envSecretCases) {
     const { findings } = maskText(text, { enabled: ['env_secret'] });
@@ -224,6 +247,63 @@ function runPatternTests() {
       passed++;
     } else {
       console.error(`FAIL env_secret ${JSON.stringify(text)}: expected match=${shouldMatch}, got ${findings.length}`);
+      failed++;
+    }
+  }
+
+  // Only the value is replaced, and masking keeps the surrounding syntax valid.
+  {
+    const cases = [
+      ['{"password": "hunter2prod"}', (m) => JSON.parse(m).password.startsWith('[ENV_SECRET_')],
+      ['<password>hunter2prod</password>', (m) => /^<password>\[ENV_SECRET_\d+\]<\/password>$/.test(m)],
+      ['echo "TOKEN=abc123xyz"', (m) => /^echo "TOKEN=\[ENV_SECRET_\d+\]"$/.test(m)],
+      ['Set `API_KEY=abc123xyz` first', (m) => /`API_KEY=\[ENV_SECRET_\d+\]`/.test(m)],
+    ];
+    for (const [text, ok] of cases) {
+      const { masked } = maskText(text, { enabled: ['env_secret'] });
+      let good = false;
+      try { good = ok(masked); } catch { good = false; }
+      if (good) {
+        passed++;
+      } else {
+        console.error(`FAIL env_secret masking broke syntax: ${JSON.stringify(text)} -> ${JSON.stringify(masked)}`);
+        failed++;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // hex_secret vs hashes (issue #4). A git commit is 40 hex characters and a
+  // SHA-256 checksum 64, so every changelog, lockfile and CI log read as a
+  // credential and the Guardian demanded approval for harmless files.
+  // -------------------------------------------------------------------------
+  const SHA1 = ['9fceb02d0ae598e9', '5dc970b74767f193', '72d61af8'].join('');
+  const SHA256 = ['e3b0c44298fc1c149afbf4c8996fb924', '27ae41e4649b934ca495991b7852b855'].join('');
+  const hexCases = [
+    // hashes in hash context: not secrets
+    [`- Fixed login redirect (${SHA1})`, false],
+    [`commit ${SHA1}`, false],
+    [`${SHA1} Merge pull request #3`, false],
+    [`${SHA256}  dist/app.tar.gz`, false],
+    [`image: node@sha256:${SHA256}`, false],
+    [`sha256: ${SHA256}`, false],
+    [`https://github.com/o/r/commit/${SHA1}`, false],
+    [`see #${SHA1}`, false],
+    // secrets: still flagged, even at hash lengths
+    [`the signing secret is ${SHA1}`, true],
+    [`token for commit ${SHA1}`, true],
+    [`secret: (${SHA1})`, true],
+    [`${SHA1}  # prod api key`, true],
+    [SHA1, true],
+    // non-standard lengths are not hash references
+    [`commit ${SHA1}abcd`, true],
+  ];
+  for (const [text, shouldMatch] of hexCases) {
+    const { findings } = maskText(text, { enabled: ['hex_secret'] });
+    if ((findings.length > 0) === shouldMatch) {
+      passed++;
+    } else {
+      console.error(`FAIL hex_secret ${JSON.stringify(text)}: expected match=${shouldMatch}, got ${findings.length}`);
       failed++;
     }
   }

@@ -264,6 +264,80 @@ function looksLikeName(tokens, common, text, idx) {
 }
 
 // ---------------------------------------------------------------------------
+// Secret assignments (env_secret) and hash references (hex_secret)
+// ---------------------------------------------------------------------------
+
+/** A key that names a secret: `DB_PASSWORD`, `client_secret`, `ApiKey`. No capture groups. */
+const SECRET_KEY = '(?:[A-Za-z_][\\w.-]*)?(?:PASSWORD|PASSWD|PWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|SECRET[_-]?KEY|CREDENTIAL|HOST|BUCKET|SIGNATURE|HMAC|DSN|WEBHOOK)[\\w.-]*';
+
+/**
+ * Split an env_secret match into its key and value, for each of its forms:
+ * `KEY=value` / `"key": "value"`, `<key>value</key>`, and
+ * `key="Key" value="value"`.
+ * `keyQuoted` / `valueQuoted` say whether form A's key and value were written
+ * in quotes; the XML forms count as quoted.
+ * @param {string} match
+ * @returns {{ key: string, value: string, keyQuoted: boolean, valueQuoted: boolean }}
+ */
+function splitSecretAssignment(match) {
+  if (match.startsWith('<')) {
+    const tag = match.match(/^<([^\s>]+)/);
+    return {
+      key: tag ? tag[1] : '',
+      value: match.replace(/^<[^>]*>/, '').replace(/<\/[^>]*>$/, '').trim(),
+      keyQuoted: true,
+      valueQuoted: true,
+    };
+  }
+  const attr = match.match(/^(?:key|name)[ \t]*=[ \t]*["']([^"']*)["'][\s\S]*value[ \t]*=[ \t]*["']([^"']*)["']$/i);
+  if (attr) return { key: attr[1], value: attr[2].trim(), keyQuoted: true, valueQuoted: true };
+  const at = match.search(/[:=]/);
+  const rawKey = match.slice(0, at).trim();
+  const rawValue = match.slice(at + 1).trim();
+  return {
+    key: rawKey.replace(/["']+$/, ''),
+    value: rawValue.replace(/^["']|["']$/g, ''),
+    keyQuoted: /["']$/.test(rawKey),
+    valueQuoted: /^["']/.test(rawValue),
+  };
+}
+
+/** Words that, just before a hex string on the same line, say it is a hash. */
+const HASH_CUE_RX = /\b(?:commits?|sha-?(?:1|256|384|512)?(?:sum)?|checksums?|digests?|integrity|hash(?:es)?|revision|rev|merged?|cherry[- ]?pick(?:ed)?|blob|tree|parent|fix(?:es|ed)?|refs?|tags?|objects?)\b[^\n]{0,24}$/i;
+
+/** Words that keep a hex string a secret even when it has hash-like context. */
+const HEX_SECRET_CUE_RX = /secret|token|passw(?:or)?d|api[ _-]?key|private[ _-]?key|access[ _-]?key|\bkey\b|credential|signature|hmac|auth/i;
+
+/**
+ * Is this 40/64/128-character hex string a commit id or a checksum rather than
+ * a secret? Only standard hash lengths qualify, and a secret-like word on the
+ * same line always wins.
+ *
+ *   commit 9fceb02d...                cue word before it
+ *   - Fixed login redirect (9fceb02d...)   changelog reference
+ *   9fceb02d...  dist/app.tar.gz      checksum or `git log --oneline` listing
+ *   .../commit/9fceb02d...            commit URL, `pkg@<sha>`, `#<sha>`
+ *
+ * @param {string} match
+ * @param {string} text
+ * @param {number} idx
+ */
+function looksLikeHashReference(match, text, idx) {
+  if (![40, 64, 128].includes(match.length)) return false;
+  const lineStart = text.lastIndexOf('\n', idx - 1) + 1;
+  const lineEnd = text.indexOf('\n', idx + match.length);
+  const before = text.slice(lineStart, idx);
+  const after = text.slice(idx + match.length, lineEnd === -1 ? text.length : lineEnd);
+  if (HEX_SECRET_CUE_RX.test(before)) return false;
+  if (HASH_CUE_RX.test(before)) return true;
+  if (/(?:\/commits?\/|\/blob\/|\/tree\/|\/compare\/[^\s]*|@|#)$/.test(before)) return true;
+  if (/[([]\s*$/.test(before) && /^\s*[)\]]/.test(after)) return true;
+  // A line that starts with the hash and goes on to a file name or a message.
+  if (/^[\s>*+-]*$/.test(before) && /^[ \t]+\S/.test(after) && !HEX_SECRET_CUE_RX.test(after)) return true;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Checksum helpers
 //
 // These are exported as reusable primitives. They are NOT wired into the
@@ -709,30 +783,54 @@ const BASE_PATTERNS = [
     // real .env file were silently missed — `PASSWORD=`, `API_KEY=`, `TOKEN=`,
     // `SECRET=` all failed while `DB_PASSWORD=` matched. The pattern's own
     // fakeValue (`API_KEY=sk-fake123`) was itself undetectable.
-    rx: /(?<=^|[\s,;({\[])((?:[A-Za-z_][\w.-]*)?(?:PASSWORD|PASSWD|PWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|SECRET[_-]?KEY|CREDENTIAL|HOST|BUCKET|SIGNATURE|HMAC|DSN|WEBHOOK)[\w.-]*)[ \t]*[:=][ \t]*(?:"([^"\n]+)"|'([^'\n]+)'|([^\s\n#,;)\]}]+))/gim,
-    // Keys that contain a trigger word but never hold a secret. Kept short and
-    // specific on purpose: for a DLP tool, over-masking a benign value is a
-    // nuisance while missing a real `TOKEN=` is a breach, so the default leans
-    // toward detection and this list stays an explicit, auditable exception.
+    //
+    // Three forms, one pattern:
+    //   A. `KEY=value`, `KEY: value`, and the same with the key quoted, which is
+    //      how JSON, Python and JS objects write it (`{"password": "..."}`),
+    //      prefixed by `$` (PHP, shell) or `--` (command-line flags), or inside
+    //      Markdown inline code (`` `API_KEY=...` ``).
+    //   B. XML elements: `<password>...</password>`.
+    //   C. XML / .NET config attributes: `<add key="ApiKey" value="..."/>`.
+    // Form A's key used to have to follow whitespace or `,;({[`, so every quoted
+    // key -- appsettings.json, credentials.json, Python dicts -- was missed.
+    rx: new RegExp(
+      `(?<=^|[\\s,;({\\[$"'\`-])(${SECRET_KEY})["']?[ \\t]*[:=][ \\t]*(?:"([^"\\n]+)"|'([^'\\n]+)'|([^\\s\\n#,;)\\]}"'\`]+))`
+      + `|<(${SECRET_KEY})(?:[ \\t][^>\\n]*)?>([^<\\n]{1,256})<\\/\\5>`
+      + `|\\b(?:key|name)[ \\t]*=[ \\t]*["'](${SECRET_KEY})["'][ \\t]+value[ \\t]*=[ \\t]*["']([^"'\\n]+)["']`,
+      'gim',
+    ),
+    // Keys that contain a trigger word but never hold a secret, and values that
+    // are not secrets. Kept short and specific on purpose: for a DLP tool,
+    // over-masking a benign value is a nuisance while missing a real `TOKEN=` is
+    // a breach, so the default leans toward detection and this list stays an
+    // explicit, auditable exception.
     validate: (match) => {
-      const key = match.split(/[:=]/)[0].trim();
+      const { key, value, keyQuoted, valueQuoted } = splitSecretAssignment(match);
       if (/^(?:[\w.-]*_)?TOKENIZ(?:E|ER|ERS|ATION)$/i.test(key)) return false;
+      if (!value) return false;
+      // JSON has no bare strings, so a bare value after a quoted key is code:
+      // `{"X-Signature": HMAC_SECRET}` references a variable, it is not one.
+      if (keyQuoted && !valueQuoted) return false;
       // Never re-detect a token this masker already emitted. Now that only the
       // VALUE is replaced, `API_KEY=[OPENAI_KEY_1]` still looks like KEY=value
       // -- so without this, masking stopped being idempotent and the Guardian's
       // verifier could never converge (it re-scans its own output and would
       // escalate forever, ending in BLOCK).
-      const value = match.slice(match.search(/[:=]/) + 1).trim().replace(/^["']|["']$/g, '');
-      return !/^\[[A-Z0-9_]*\]?$/.test(value);
+      if (/^\[[A-Z0-9_]*\]?$/.test(value)) return false;
+      // JSON makes these common: `"password": null`, `"token": {` (an object).
+      if (/^(?:null|undefined|none|nil|true|false)$/i.test(value)) return false;
+      if (/^[{[]/.test(value)) return false;
+      return true;
     },
-    // Replace the VALUE only (group 2 double-quoted, 3 single-quoted, 4 bare),
-    // never the whole `KEY=value`. Masking the key name too turned
-    // `OPENAI_API_KEY=sk-...` into a bare `[ENV_SECRET_1]`, which destroys the
-    // one piece of context an agent needs to reason about the file -- and it
-    // shadowed the specific credential patterns, so the `[OPENAI_KEY_1]` token
-    // this project's own README advertises could never actually appear.
-    // Narrowing the span also lets a more specific pattern win the overlap.
-    valueGroups: [2, 3, 4],
+    // Replace the VALUE only -- form A: group 2 double-quoted, 3 single-quoted,
+    // 4 bare; form B: 6; form C: 8 -- never the whole `KEY=value`. Masking the
+    // key name too turned `OPENAI_API_KEY=sk-...` into a bare `[ENV_SECRET_1]`,
+    // which destroys the one piece of context an agent needs to reason about
+    // the file -- and it shadowed the specific credential patterns, so the
+    // `[OPENAI_KEY_1]` token this project's own README advertises could never
+    // actually appear. Narrowing the span also lets a more specific pattern win
+    // the overlap.
+    valueGroups: [2, 3, 4, 6, 8],
   },
   {
     id: 'hex_secret',
@@ -740,7 +838,10 @@ const BASE_PATTERNS = [
     labelAr: 'سر Hex',
     cat: 'cred',
     rx: /\b[a-fA-F0-9]{40,}\b/g,
-    validate: (match) => /[a-fA-F]/.test(match),
+    // A git commit is 40 hex characters and a SHA-256 checksum 64, so without
+    // context every changelog, lockfile and CI log read as a credential -- and
+    // the Guardian then demanded human approval for a harmless file.
+    validate: (match, text, idx) => /[a-fA-F]/.test(match) && !looksLikeHashReference(match, text, idx),
     fakeValues: ['a1b2c3d4e5f6789012345678901234567890abcd'],
   },
 ];

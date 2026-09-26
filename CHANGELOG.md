@@ -43,6 +43,23 @@ to 3.
 
 ### Fixed
 
+- **Secrets under quoted keys are detected** (#3). `env_secret` now reads
+  `{"password": "…"}` (JSON), `{'password': '…'}` (Python / JS), XML elements
+  (`<password>…</password>`) and .NET-style attributes
+  (`<add key="ApiKey" value="…"/>`), `$password = "…"` (PHP), `--password=…`
+  (command-line flags) and keys in Markdown inline code. Only the value is
+  replaced, so JSON and XML stay valid. Empty values, `null` / `true` /
+  `false`, nested objects, and bare variable references after a quoted key
+  (`{"X-Signature": HMAC_SECRET}`) are not flagged. An unquoted value now
+  stops at a quote or backtick, so masking no longer swallows the closing
+  quote of `echo "TOKEN=…"` or of inline code.
+- **Commit hashes and checksums are no longer credentials** (#4).
+  `hex_secret` skips 40-, 64- and 128-character hex strings in hash context:
+  after a cue word (`commit`, `sha256`, `checksum`, …), as a `(sha)` changelog
+  reference, in a commit URL or `@sha256:` digest, or at the start of a
+  checksum or `git log` listing line. A secret-like word on the same line
+  (`secret`, `token`, `api key`, …) keeps it flagged. A changelog citing a
+  commit now gets `ALLOW` from the Guardian instead of `REQUIRE_APPROVAL`.
 - **Masking a short name no longer corrupts longer words.** The xlsx, docx and
   pptx writers replaced every masked value as a plain substring, so masking
   `Ali` would have rewritten `Alignment`. Name-like values are now replaced as
