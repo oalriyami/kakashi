@@ -532,7 +532,10 @@ program
 
     if (options.json) {
       // The audit event is already value-free by construction, which makes it
-      // exactly the right payload to hand back to a calling agent.
+      // exactly the right payload to hand back to a calling agent. `plan` and
+      // `verifications` are the fields the installed agent rules tell agents to
+      // narrate from; both hold classes, tools, reason codes and counts only.
+      // agent-rules.test.js fails if a field the rules name goes missing.
       console.log(JSON.stringify({
         decision: result.decision,
         reasonCode: result.reasonCode,
@@ -540,6 +543,8 @@ program
         risk: result.risk,
         iterations: result.iterations,
         task: result.state.context.taskAnalysis.toJSON(),
+        plan: result.plan || { actions: [], meta: null },
+        verifications: result.verifications.map(({ observation, ...v }) => v),
         verificationPassed: result.auditEvent.verificationPassed,
         approvalsNeeded: result.approvalsNeeded,
         event: result.auditEvent,

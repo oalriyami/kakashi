@@ -16,7 +16,7 @@
 [![version](https://img.shields.io/badge/version-1.3.1-1C2030?style=flat)](CHANGELOG.md)
 [![node](https://img.shields.io/badge/node-%3E%3D18-4CAF50?style=flat)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-MIT-B8C4D4?style=flat)](LICENSE)
-[![agents](https://img.shields.io/badge/agents-20%2B-8A2BE2?style=flat)](#works-inside-your-agent)
+[![agents](https://img.shields.io/badge/agents-7_installed_%2B_any_shell-8A2BE2?style=flat)](#works-inside-your-agent)
 [![formats](https://img.shields.io/badge/formats-50%2B-CC0000?style=flat)](#50-file-formats)
 [![tests](https://img.shields.io/badge/tests-407_passing-4CAF50?style=flat)](tests/)
 [![network calls](https://img.shields.io/badge/network_calls-zero-1C2030?style=flat)](#privacy-guarantee)
@@ -111,12 +111,12 @@ open("config/settings.py")
 Inside those files — without you noticing, without a warning, without any friction — are things that should never leave your machine:
 
 ```
-[DB_CONN_1]
-[OPENAI_KEY_1]
-[GH_TOKEN_1]
-[EMAIL_EXAMPLE]
-[PHONE_EXAMPLE]
-[CC_1]
+postgresql://admin:Pr0d_P@55word!@10.128.3.4:5432/customers
+sk-proj-aBcDeFgHiJkLmNoPqRsTuVwXyZ123456789
+ghp_abc123def456ghi789jkl012mno345pqr678
+admin@example.com
++1-415-555-0188
+4111-1111-1111-1111
 ```
 
 **They just traveled to a third-party server. In plaintext. With no undo.**
@@ -216,8 +216,8 @@ kakashi mask  config/settings.py          # → masked_settings.py
 kakashi scan-dir ./repo -f html -o report.html
 
 # 3. a database
-kakashi db-scan "[DB_CONN_2]" -q "SELECT * FROM customers"
-kakashi db-mask "[DB_CONN_2]" -q "SELECT * FROM customers"
+kakashi db-scan "postgres://user@host/db" -q "SELECT * FROM customers"
+kakashi db-mask "postgres://user@host/db" -q "SELECT * FROM customers"
 
 # 4. hand the decision to the Guardian
 kakashi guard employees.md \
@@ -479,14 +479,14 @@ Kakashi connects **from your machine**, streams rows locally, runs each one thro
 
 ```bash
 # counts only — agent-safe, writes nothing
-kakashi db-scan "[DB_CONN_3]" -q "SELECT * FROM customers"
+kakashi db-scan "postgres://user@host:5432/db" -q "SELECT * FROM customers"
 
 # query, mask locally, write a safe copy
-kakashi db-mask "[DB_CONN_3]" -q "SELECT * FROM customers" \
+kakashi db-mask "postgres://user@host:5432/db" -q "SELECT * FROM customers" \
   -f csv -o safe_customers.csv
 
 # full original → token map (DELIBERATELY verbose — exposes plaintext)
-kakashi db-audit "[DB_CONN_4]" -q "SELECT * FROM users LIMIT 50"
+kakashi db-audit "mysql://user@host/db" -q "SELECT * FROM users LIMIT 50"
 ```
 
 ```
@@ -504,12 +504,12 @@ Kakashi
 
 | Engine | Connection string |
 | --- | --- |
-| **PostgreSQL** | `[DB_CONN_5] · `[DB_CONN_6] · `jdbc:postgresql:` |
-| **MySQL / MariaDB** | `[DB_CONN_7] · `jdbc:mysql:` |
-| **MongoDB** | `[DB_CONN_8] · `[DB_CONN_9] |
+| **PostgreSQL** | `postgres://` · `postgresql://` · `jdbc:postgresql:` |
+| **MySQL / MariaDB** | `mysql://` · `jdbc:mysql:` |
+| **MongoDB** | `mongodb://` · `mongodb+srv://` |
 | **Snowflake** | `snowflake://` |
 | **Databricks** | `databricks://` |
-| **SQLite** | `[DB_CONN_10] or any `.db` / `.sqlite` / `.sqlite3` path |
+| **SQLite** | `sqlite://` or any `.db` / `.sqlite` / `.sqlite3` path |
 
 Database drivers are **optional dependencies**, lazily required — you only install the one you use, and Kakashi tells you exactly what to `npm install` if it is missing.
 
@@ -579,26 +579,26 @@ Agents with a native command-file mechanism receive all 14 commands. Agents with
 
 Ask from the agent chat and it runs `kakashi` locally under the hood. When using Codex CLI, Copilot or Continue, choose a plain-language trigger such as `use kakashi to scan this folder` when the runtime does not accept custom slash commands.
 
+The installer sets up seven agents:
+
 | Agent | Auto-activates | Slash commands | Install |
 |-------|:--------------:|:--------------:|---------|
-| **Claude** | **always** | full set (14) | `--only claude` |
+| **Claude Code** | **always** | full set (14) | `--only claude` |
 | **Cursor** | **always** | full set (14) | `--only cursor` |
-| **Codex** | **always** | plain-language orchestration | `--only codex` |
+| **Codex CLI** | **always** | plain-language orchestration | `--only codex` |
 | **Windsurf** | **always** | full set (14) | `--only windsurf` |
-| **Cline** | **always** | full set (14) | `--only cline` |
-| **Copilot** | **always** | via `.github/copilot-instructions.md` | `--only copilot` |
+| **Cline** | **always** | full set (14) | `--only cline --with-init`, run inside the repository |
+| **GitHub Copilot** | **always** | via `.github/copilot-instructions.md` | `--only copilot --with-init`, run inside the repository |
 | **Continue** | _per session_ | plain-language orchestration | `--only continue` |
-| **Aider** | _per session_ | `/kakashi` | `--only aider` |
-| **Roo** | _per session_ | `/kakashi` | `--only roo` |
-| **Kilo** | _per session_ | `/kakashi` | `--only kilo` |
-| **OpenHands** | _per session_ | `/kakashi` | `--only openhands` |
-| **Warp** | _per session_ | `/kakashi` | `--only warp` |
-| **Replit** | _per session_ | `/kakashi` | `--only replit` |
-| **Augment** | _per session_ | `/kakashi` | `--only augment` |
-| **Junie** | _per session_ | `/kakashi` | `--only junie` |
 
 > **always** = always on, activates from first message<br/>
 > _per session_ = type `/kakashi` once per session to activate
+
+`--only` takes one id or a comma-separated list. An unknown id is an error, and an agent that can't be set up (for example, Windsurf isn't installed yet) is reported as skipped with the reason.
+
+### Other agents
+
+Kakashi doesn't install into other agents automatically. Aider, Roo Code, Kilo Code, OpenHands, Warp, Replit, Augment, Junie and similar agents can still use it, because Kakashi is a command-line tool: any agent that can run a shell command can run `kakashi`. To teach one when to do so, copy the Kakashi block from this repository's [`AGENTS.md`](AGENTS.md) into the agent's rules or instructions file (see its documentation for the location). Many agents read an `AGENTS.md` at the repository root directly.
 
 The CLI itself is **bilingual — English and Arabic** (`--lang ar`, or set `KAKASHI_LANG`), as are the compliance reports.
 
@@ -650,45 +650,45 @@ Docs        .md  .rst  .txt  .log
 ### Credentials
 
 ```
-OpenAI Key         sk-proj-aBcDeF...      →  [OPENAI_KEY_1]
-Anthropic key       [ANTHROPIC_EXAMPLE]     →  [ANTHROPIC_1]
-AWS Key            [AWS_KEY_1]   →  [AWS_KEY_1]
-GitHub Token       ghp_aBcDeFgHiJ...      →  [GH_TOKEN_1]
-Stripe key          [STRIPE_EXAMPLE]        →  [STRIPE_1]
-Slack token         [SLACK_EXAMPLE]         →  [SLACK_1]
-HuggingFace        hf_aBcDeFgHiJ...       →  [HF_TOKEN_1]
-Databricks token    [DATABRICKS_EXAMPLE]    →  [DATABRICKS_TOKEN_1]
-Databricks host     [DBX_HOST_EXAMPLE]      →  [DATABRICKS_HOST_1]
-S3 URI              [S3_URI_EXAMPLE]        →  [S3_URI_1]
-JWT Token          eyJhbGciOiJIUzI1...    →  [JWT_1]
-Bearer token        [BEARER_EXAMPLE]        →  [BEARER_1]
-DB Connection      [DB_CONN_11] →  [DB_CONN_1]
-SQL Password       IDENTIFIED BY 'S3cr... →  IDENTIFIED BY [SQL_PASSWORD_1]
-SSH Private Key    -----BEGIN RSA...      →  [SSH_KEY_1]
-ENV Secret         API_KEY=[ENV_SECRET_1]      →  [ENV_SECRET_1]
-Hex secret          [HEX_EXAMPLE] (40+)     →  [HEX_SECRET_1]
+OpenAI Key         sk-proj-aBcDeF...       →  [OPENAI_KEY_1]
+Anthropic Key      sk-ant-api03-...        →  [ANTHROPIC_1]
+AWS Key            AKIAIOSFODNN7EXAMPLE    →  [AWS_KEY_1]
+GitHub Token       ghp_aBcDeFgHiJ...       →  [GH_TOKEN_1]
+Stripe Key         sk_live_aBcDeF...       →  [STRIPE_1]
+Slack Token        xoxb-123456-...         →  [SLACK_1]
+HuggingFace        hf_aBcDeFgHiJ...        →  [HF_TOKEN_1]
+Databricks Token   dapi1234567890abcdef... →  [DATABRICKS_TOKEN_1]
+Databricks Host    https://dbc-a1b2...     →  [DATABRICKS_HOST_1]
+S3 URI             s3://prod-bucket/...    →  [S3_URI_1]
+JWT Token          eyJhbGciOiJIUzI1...     →  [JWT_1]
+Bearer Token       Bearer eyJhbGci...      →  [BEARER_1]
+DB Connection      postgresql://user:p...  →  [DB_CONN_1]
+SQL Password       IDENTIFIED BY 'S3cr...  →  IDENTIFIED BY [SQL_PASSWORD_1]
+SSH Private Key    -----BEGIN RSA...       →  [SSH_KEY_1]
+ENV Secret         API_KEY=abc123...       →  [ENV_SECRET_1]
+Hex Secret         a1b2c3d4e5f6... (40+)   →  [HEX_SECRET_1]
 ```
 
 ### Identity & personal info
 
 ```
-Emirates ID        [NATIONAL_ID_1]     →  [NATIONAL_ID_1]      ← checksum-verified
-Passport           [PASSPORT_1]              →  [PASSPORT_1]
-Visa Number        [VISA_ID_1]       →  [VISA_ID_1]
-Unified ID         1234567890             →  [UNIFIED_ID_1]
-UAE IBAN           AE070331234567890123   →  [UAE_IBAN_1]         ← mod-97 verified
-Trade license      [TRADE_LICENSE_EXAMPLE] →  [TRADE_LIC_1]
-P.O. Box           [POBOX_EXAMPLE]         →  [POBOX_1]
-Email              [EMAIL_EXAMPLE]         →  [EMAIL_1]
-UAE Phone          [UAE_PHONE_EXAMPLE]     →  [INTL_PHONE_1]
-Phone              [PHONE_EXAMPLE]         →  [PHONE_1]
-IP Address         [IP_EXAMPLE]            →  [IP_1]
-Credit Card        [CC_2]    →  [CC_1]               ← Luhn-verified
-SSN / National ID  [SSN_1]            →  [SSN_1]
-Date of Birth      [DOB_EXAMPLE]           →  [DOB_1]
-Age                [AGE_EXAMPLE]           →  [AGE_1]
-Full name          [NAME_EXAMPLE]          →  [FULL_NAME_1]
-Arabic name        [ARABIC_NAME_EXAMPLE]   →  [NON_LATIN_NAME_1]
+Emirates ID        784-1990-1234567-1      →  [NATIONAL_ID_1]      ← checksum-verified
+Passport           AB1234567               →  [PASSPORT_1]
+Visa Number        123/2020/1234567        →  [VISA_ID_1]
+Unified ID         1234567890              →  [UNIFIED_ID_1]
+UAE IBAN           AE070331234567890123    →  [UAE_IBAN_1]         ← mod-97 verified
+Trade License      CN-1234567              →  [TRADE_LIC_1]
+P.O. Box           P.O. Box 12345          →  [POBOX_1]
+Email              user@example.com        →  [EMAIL_1]
+UAE Phone          +971-50-123-4567        →  [INTL_PHONE_1]
+Phone              +1-415-555-0188         →  [PHONE_1]
+IP Address         10.128.3.4              →  [IP_1]
+Credit Card        4111 1111 1111 1111     →  [CC_1]               ← Luhn-verified
+SSN / National ID  123-45-6789             →  [SSN_1]
+Date of Birth      DOB: 15/03/1990         →  [DOB_1]
+Age                age: 34                 →  [AGE_1]
+Full Name          Alex Taylor             →  [FULL_NAME_1]
+Arabic Name        محمد أحمد               →  [NON_LATIN_NAME_1]
 ```
 
 Checksum-verified classes are a distinct risk signal to the Guardian: an identifier that *passes* its checksum is live, not a lookalike, and scores higher.
@@ -714,10 +714,10 @@ kakashi mask file.env --mode fake     # [SYNTHETIC_EMAIL]      ← preserves LLM
 ### `.env` file
 
 ```diff
-- DATABASE_URL=[DB_CONN_12]
-- OPENAI_API_KEY=[OPENAI_KEY_2]
-- STRIPE_SECRET=[STRIPE_1]
-- SUPPORT_EMAIL=[EMAIL_EXAMPLE]
+- DATABASE_URL=postgresql://admin:Pr0d_P@55w0rd!@db.example.com:5432/customers
+- OPENAI_API_KEY=sk-proj-xK9mN2pQrStUvWxYz1234567890abcdef
+- STRIPE_SECRET=sk_live_51HGk2n...
+- SUPPORT_EMAIL=support@example.com
 + DATABASE_URL=[DB_CONN_1]
 + OPENAI_API_KEY=[OPENAI_KEY_1]
 + STRIPE_SECRET=[STRIPE_1]
@@ -726,18 +726,18 @@ kakashi mask file.env --mode fake     # [SYNTHETIC_EMAIL]      ← preserves LLM
 
 ### SQL file
 
-SQL auth clauses delimit the secret with a space (`IDENTIFIED BY [SQL_PASSWORD_1]`, `WITH PASSWORD [SQL_PASSWORD_1]`), so Kakashi masks just the value and leaves the statement readable — perfect for asking an agent to optimize a query or review a schema without leaking credentials or customer records.
+SQL auth clauses delimit the secret with a space (`IDENTIFIED BY '...'`, `WITH PASSWORD '...'`), so Kakashi masks just the value and leaves the statement readable — perfect for asking an agent to optimize a query or review a schema without leaking credentials or customer records.
 
 ```diff
-- CREATE USER reporting IDENTIFIED BY [SQL_PASSWORD_2];
+- CREATE USER reporting IDENTIFIED BY 'Sup3rS3cret!';
 - INSERT INTO customers (id, full_name, email) VALUES
--   (1, '[NAME_EXAMPLE]', '[EMAIL_EXAMPLE]');
+-   (1, 'John Smith', 'john.smith@example.com');
 + CREATE USER reporting IDENTIFIED BY [SQL_PASSWORD_1];
 + INSERT INTO customers (id, full_name, email) VALUES
 +   (1, '[FULL_NAME_1]', '[EMAIL_1]');
 ```
 
-> Need a **runnable** file with synthetic data (e.g. to seed a dev database)? Use `--mode fake` — it substitutes realistic stand-ins like `IDENTIFIED BY [SQL_PASSWORD_3]`, keeping the SQL valid.
+> Need a **runnable** file with synthetic data (e.g. to seed a dev database)? Use `--mode fake` — it substitutes realistic stand-ins like `IDENTIFIED BY 'P@ssw0rd!'`, keeping the SQL valid.
 
 ---
 
@@ -791,7 +791,7 @@ There are plenty of secret scanners and PII libraries. None of them sit *inside*
 
 | Tool | Runs inside AI agent | Local-only | Masks (not just detects) | PDF/Word/Excel reconstruct | Autonomous decision | One-line install |
 |------|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Kakashi** | **Yes (20+ agents)** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
+| **Kakashi** | **Yes (7 agents, plus any that runs shell commands)** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** |
 | GitLeaks | No | Yes | No — detect only | No | No | partial |
 | TruffleHog | No | Yes | No — detect only | No | No | partial |
 | detect-secrets (Yelp) | No | Yes | No — detect only | No | No | partial |
@@ -804,7 +804,7 @@ There are plenty of secret scanners and PII libraries. None of them sit *inside*
 
 **Kakashi is genuinely the only option:**
 
-- The only open-source tool that ships as a **skill / rule for 20+ AI coding agents** out of the box.
+- The only open-source tool that installs as a **skill / rule into 7 AI coding agents** out of the box, and works in any other agent that can run a shell command.
 - The only one that **masks `.docx`, `.xlsx`, `.pptx` while reconstructing the original format** — you get a real Word/Excel file back.
 - The only one that applies the same engine to **files, folders and live databases**, all client-side.
 - The only one that makes an **autonomous, auditable release decision** about the data an agent asked for — and verifies its own output before releasing it.

@@ -60,6 +60,25 @@ to 3.
   checksum or `git log` listing line. A secret-like word on the same line
   (`secret`, `token`, `api key`, …) keeps it flagged. A changelog citing a
   commit now gets `ALLOW` from the Guardian instead of `REQUIRE_APPROVAL`.
+- **`guard --json` now has the fields the agent rules name** (#17). The
+  installed rules tell agents to narrate from `plan.actions` and
+  `verifications`, which the output didn't have. Both are added, value-free
+  (classes, tools, reason codes, counts). A test parses the field list out of
+  every rule file and fails if the output is missing any of them.
+- **README examples restored** (#18). The v1.3.1 README had been run through
+  the masker: commands read `kakashi db-scan "[DB_CONN_2]"`, the
+  connection-string table was unreadable, and the "What Kakashi Catches" tables
+  showed tokens on both sides of the arrow. The original example values are
+  back (live-key shapes kept truncated). A docs test fails if a token or an
+  `[…_EXAMPLE]` placeholder appears on the input side of an example again.
+- **Agent support claims match the installer** (#19). The README listed 15
+  agents ("20+") with `--only` commands, but the installer supports 7. The
+  table now lists the 7, with the `--with-init` step Cline and Copilot need, and
+  explains how other agents can use Kakashi. The installer rejects an unknown
+  `--only` id, accepts a comma-separated list, and reports an agent it couldn't
+  set up as skipped with the reason, instead of doing nothing (Cline and
+  Copilot without `--with-init`) or printing `[ok]` without writing anything
+  (Windsurf without `~/.windsurf`).
 - **Masking a short name no longer corrupts longer words.** The xlsx, docx and
   pptx writers replaced every masked value as a plain substring, so masking
   `Ali` would have rewritten `Alignment`. Name-like values are now replaced as

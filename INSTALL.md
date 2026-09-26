@@ -78,7 +78,7 @@ node bin/install.js --all
 | Flag | What |
 |---|---|
 | `--all` | Install for all detected agents |
-| `--only <id>` | One agent (repeatable) |
+| `--only <id>` | One agent (repeatable, or a comma-separated list). An unknown id is an error. |
 | `--dry-run` | Preview only |
 | `--with-init` | Drop repo-level rules in `$PWD` |
 | `--uninstall` | Remove Kakashi config |

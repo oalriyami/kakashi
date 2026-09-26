@@ -1,7 +1,7 @@
 ---
 name: kakashi
 version: 1.0.0
-description: Hide secrets, credentials, and personal data before they leave your machine — works in Claude Code, Cursor, Codex, and 20+ AI agents (50+ file formats including PDF, Word, Excel, JSON, .env)
+description: Hide secrets, credentials, and personal data before they leave your machine — works in Claude Code, Cursor, Codex and any AI agent that can run a shell command (50+ file formats including PDF, Word, Excel, JSON, .env)
 author: Mohamed Atef Fahmy
 always: false
 ---
