@@ -1,3 +1,4 @@
+const assert = require('assert');
 const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -239,6 +240,28 @@ function runCliTests() {
   });
 
   fs.rmSync(pipeDir, { recursive: true, force: true });
+
+  // One token map per mask-dir run (issue #14): the same value gets the same
+  // token in every file, and different values never share one.
+  check('mask-dir keeps tokens consistent across files', () => {
+    const os = require('os');
+    const fs = require('fs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kakashi-maskdir-'));
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'shared: sara@example.com\nonly-a: omar@example.com\n');
+    fs.writeFileSync(path.join(dir, 'b.txt'), 'only-b: layla@example.com\nshared: sara@example.com\n');
+    for (const mode of ['typed', 'fake']) {
+      const r = spawnSync(process.execPath, [CLI, 'mask-dir', dir, '--ext', 'txt', '-m', mode],
+        { encoding: 'utf8', env: { ...process.env, HOME: dir, USERPROFILE: dir } });
+      assert.strictEqual(r.status, 0, r.stderr);
+      const a = fs.readFileSync(path.join(dir, 'masked_a.txt'), 'utf8').split('\n');
+      const b = fs.readFileSync(path.join(dir, 'masked_b.txt'), 'utf8').split('\n');
+      const value = (line) => line.split(': ')[1];
+      assert.strictEqual(value(a[0]), value(b[1]), `${mode}: sara differs across files`);
+      const distinct = new Set([value(a[0]), value(a[1]), value(b[0])]);
+      assert.strictEqual(distinct.size, 3, `${mode}: different people share a replacement: ${[...distinct]}`);
+      for (const f of ['masked_a.txt', 'masked_b.txt']) fs.unlinkSync(path.join(dir, f));
+    }
+  });
 
   console.log(`cli.test.js: ${passed} passed, ${failed} failed`);
   return failed === 0;

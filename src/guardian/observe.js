@@ -81,6 +81,7 @@ function projectClasses(enriched) {
  * @param {string} resolvedPath - already validated by paths.resolveResource
  * @param {object} [opts]
  * @param {string} [opts.kind] - 'resource' | 'artifact' (labels the observation)
+ * @param {string} [opts.minConfidence] - the destination's minNameConfidence
  * @returns {Promise<{ observation: Observation, text: string, data: object }>}
  *   `text`/`data` stay inside the caller (executor/verifier) and are never
  *   attached to the Observation itself.
@@ -91,7 +92,7 @@ async function observe(resolvedPath, opts = {}) {
     throw new Error(`Guardian: unsupported resource format: ${nodePath.basename(resolvedPath)}`);
   }
   const data = await formats.readFile(resolvedPath);
-  const { findings } = maskText(data.text);
+  const { findings } = maskText(data.text, { minConfidence: opts.minConfidence });
   const { findings: enriched, summary } = summarize(findings);
 
   const classes = projectClasses(enriched);

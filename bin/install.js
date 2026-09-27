@@ -146,10 +146,12 @@ function installWindsurf() {
   const body = readFile(path.join(ROOT, 'src', 'rules', 'kakashi-activate.md')) || '';
   const rule = `# Kakashi\n\n${body}`;
   const globalDir = path.join(homeDir, '.windsurf', 'rules');
-  if (fs.existsSync(path.dirname(globalDir)) || opts.withInit) {
-    writeFile(path.join(globalDir, 'kakashi.md'), rule);
-    copySlashCommands(path.join(homeDir, '.windsurf', 'commands'));
+  if (!fs.existsSync(path.dirname(globalDir)) && !opts.withInit) {
+    console.log('  [skip] Windsurf: ~/.windsurf not found. Open Windsurf once, or run inside a repository with --with-init.');
+    return;
   }
+  writeFile(path.join(globalDir, 'kakashi.md'), rule);
+  copySlashCommands(path.join(homeDir, '.windsurf', 'commands'));
   if (opts.withInit) {
     writeFile(path.join(process.cwd(), '.windsurf', 'rules', 'kakashi.md'), rule);
     copySlashCommands(path.join(process.cwd(), '.windsurf', 'commands'));
@@ -158,7 +160,10 @@ function installWindsurf() {
 }
 
 function installCline() {
-  if (!opts.withInit) return;
+  if (!opts.withInit) {
+    console.log('  [skip] Cline: rules live in the repository. Run inside it with --only cline --with-init.');
+    return;
+  }
   const body = readFile(path.join(ROOT, 'src', 'rules', 'kakashi-activate.md')) || '';
   writeFile(path.join(process.cwd(), '.clinerules', 'kakashi.md'), `# Kakashi\n\n${body}`);
   copySlashCommands(path.join(process.cwd(), '.clinerules', 'commands'));
@@ -166,7 +171,10 @@ function installCline() {
 }
 
 function installCopilot() {
-  if (!opts.withInit) return;
+  if (!opts.withInit) {
+    console.log('  [skip] GitHub Copilot: instructions live in the repository. Run inside it with --only copilot --with-init.');
+    return;
+  }
   const block = loadActivateBlock();
   if (!block) return;
   appendMarkerBlock(path.join(process.cwd(), '.github', 'copilot-instructions.md'), block);
@@ -175,7 +183,10 @@ function installCopilot() {
 
 function installContinue() {
   const configPath = path.join(homeDir, '.continue', 'config.json');
-  if (!fs.existsSync(configPath)) return;
+  if (!fs.existsSync(configPath)) {
+    console.log('  [skip] Continue: ~/.continue/config.json not found. Open Continue once so it creates its config.');
+    return;
+  }
   try {
     const config = JSON.parse(readFile(configPath));
     const body = readFile(path.join(ROOT, 'src', 'rules', 'kakashi-activate.md')) || '';
@@ -300,7 +311,7 @@ function parseArgs(argv) {
     else if (arg === '--list') result.list = true;
     else if (arg === '--force') result.force = true;
     else if (arg === '--non-interactive') result.nonInteractive = true;
-    else if (arg === '--only') result.only.push(argv[++i]);
+    else if (arg === '--only') result.only.push(...String(argv[++i] || '').split(',').map((s) => s.trim()).filter(Boolean));
     else if (arg === '--config-dir') result.configDir = argv[++i]?.replace(/^~/, homeDir);
   }
   return result;
@@ -320,6 +331,17 @@ function main() {
       return;
     }
     uninstall();
+    return;
+  }
+
+  // An unknown id used to install nothing and say only "No agents detected",
+  // so a documented-looking command like `--only aider` silently did nothing.
+  const unknown = opts.only.filter((id) => !AGENTS.some((a) => a.id === id));
+  if (unknown.length) {
+    console.error(`\nUnknown agent id: ${unknown.join(', ')}`);
+    console.error(`Supported: ${AGENTS.map((a) => a.id).join(', ')}`);
+    console.error('Other agents can use Kakashi through their own rules file: see "Other agents" in the README.\n');
+    process.exitCode = 1;
     return;
   }
 

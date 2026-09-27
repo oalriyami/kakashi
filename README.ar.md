@@ -9,11 +9,11 @@
 [![npm](https://img.shields.io/badge/npm-%40muhammadatef%2Fkakashi-CC0000?style=flat&logo=npm&logoColor=white)](https://www.npmjs.com/package/@muhammadatef/kakashi)
 [![node](https://img.shields.io/badge/node-%3E%3D18-4CAF50?style=flat)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-MIT-B8C4D4?style=flat)](LICENSE)
-[![agents](https://img.shields.io/badge/agents-20%2B-8A2BE2?style=flat)](#يعمل-داخل-وكيلك)
+[![agents](https://img.shields.io/badge/agents-7_installed_%2B_any_shell-8A2BE2?style=flat)](#يعمل-داخل-وكيلك)
 [![formats](https://img.shields.io/badge/formats-50%2B-CC0000?style=flat)](#أكثر-من-50-صيغة-ملف)
 [![network calls](https://img.shields.io/badge/network_calls-zero-1C2030?style=flat)](#ضمان-الخصوصية)
 
-طبقة خصوصية محلية تعيش *داخل* Claude Code و Cursor و Codex CLI وأكثر من 20 وكيل ذكاء اصطناعي.
+طبقة خصوصية محلية تعيش *داخل* Claude Code و Cursor و Codex CLI وأربعة وكلاء ذكاء اصطناعي آخرين، وتعمل مع أي وكيل يستطيع تشغيل أمر في الطرفية.
 
 تُخفي مفاتيح API وكلمات المرور والأسرار والبيانات الشخصية عبر **PDF و Word و Excel و JSON و .env** وأكثر من 45 صيغة أخرى — *قبل* أن يراها وكيلك.
 
@@ -131,16 +131,26 @@ kakashi mask quarterly_report.xlsx
 
 ## يعمل داخل وكيلك
 
-ست أوامر Slash يتم تثبيتها مباشرة في محادثة الوكيل — Claude Code و Cursor و Codex CLI و Windsurf يحصلون على المجموعة الكاملة:
+يثبّت برنامج التثبيت Kakashi في سبعة وكلاء: Claude Code و Cursor و Codex CLI و Windsurf و Cline و GitHub Copilot و Continue. الوكلاء الذين يدعمون ملفات الأوامر يحصلون على الأوامر الأربعة عشر كاملة، والباقون يحصلون على السلوك نفسه عبر قاعدة دائمة:
 
 ```
-/kakashi              فعّل وضع الخصوصية للجلسة
-/kakashi-scan <path>  الأعداد فقط — بدون معاينات (آمن للوكيل، افتراضي)
-/kakashi-mask <path>  اكتب masked_<file> بجانب الأصل
-/kakashi-audit <path> التخطيط الكامل من الأصل → البديل (يكشف الأسرار عمداً)
-/kakashi-stats        إحصاءات الجلسة التراكمية
-/kakashi-list         كل أنماط الاكتشاف النشطة
+/kakashi                    اعرض النبذة أو اختر الأداة المناسبة من طلبك
+/kakashi-scan <path>        افحص ملفاً واحداً — الأعداد فقط (آمن للوكيل)
+/kakashi-mask <path>        اكتب masked_<file> بجانب الأصل
+/kakashi-scan-dir <dir>     افحص مجلداً وأنشئ تقريراً مربوطاً بمواد القانون
+/kakashi-mask-dir <dir>     أخفِ ملفات مجلد كامل بعد التأكيد
+/kakashi-guard <path>       قرّر هل يجوز إطلاق الملف ولأي وكيل
+/kakashi-db-scan <conn>     افحص نتائج استعلام قاعدة بيانات — الأعداد فقط
+/kakashi-db-mask <conn>     أخفِ نتائج الاستعلام في نسخة محلية آمنة
+/kakashi-db-audit <conn>    خريطة الرموز لقاعدة البيانات (يكشف القيم عمداً)
+/kakashi-audit <path>       خريطة الرموز للملف (يكشف القيم عمداً)
+/kakashi-agent-guard <dir>  شغّل خدمة الخصوصية المحلية (loopback فقط)
+/kakashi-stats              العدادات المحلية التراكمية
+/kakashi-list               كل أنماط الاكتشاف النشطة
+/kakashi-impact             لقطة أثر خالية من القيم
 ```
+
+أي وكيل آخر يستطيع تشغيل أوامر الطرفية يمكنه استخدام Kakashi أيضاً: انسخ قسم Kakashi من ملف [`AGENTS.md`](AGENTS.md) إلى ملف قواعد ذلك الوكيل.
 
 ## أكثر من 50 صيغة ملف
 

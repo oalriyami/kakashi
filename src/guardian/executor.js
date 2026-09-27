@@ -38,9 +38,10 @@ const Executor = {
    * @param {import('./policy').AuthorizedPlan} args.authorized
    * @param {string} args.sourcePath - validated by paths.resolveResource
    * @param {string} args.artifactPath - validated by paths.resolveOutput
+   * @param {string} [args.minConfidence] - the destination's minNameConfidence
    * @returns {Promise<object>} tool result (audit-safe: counts and classes only)
    */
-  async execute({ authorized, sourcePath, artifactPath }) {
+  async execute({ authorized, sourcePath, artifactPath, minConfidence }) {
     if (!authorized || !authorized.authorized) {
       // Defence in depth. The loop already checks this; if a future caller
       // forgets, fail closed rather than executing an unauthorised plan.
@@ -71,7 +72,7 @@ const Executor = {
     for (const mode of modeOrder) {
       const actions = byMode.get(mode);
       const enabled = actions.flatMap((a) => [...a.patternIds]);
-      const result = maskText(text, { mode, enabled });
+      const result = maskText(text, { mode, enabled, minConfidence });
       text = result.masked;
       for (const f of result.findings) {
         // The replacement map is what the xlsx/docx/pptx writers use to patch

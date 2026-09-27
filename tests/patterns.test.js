@@ -17,6 +17,46 @@ const cases = [
   { id: 'uae_iban', input: 'IBAN AE070331234567890123456', shouldMatch: true },
   { id: 'uae_iban', input: 'IBAN AE07 0331 2345 6789 0123 456', shouldMatch: true },
   { id: 'uae_iban', input: 'IBAN GB29NWBK60161331926819', shouldMatch: false }, // UK IBAN, not UAE
+  // Noisy patterns need context (issue #8)
+  { id: 'passport', input: 'Invoice IN20240115 paid', shouldMatch: false },
+  { id: 'passport', input: 'Order PO12345678 shipped', shouldMatch: false },
+  { id: 'passport', input: 'passport no. IN20240115', shouldMatch: true }, // a passport label wins
+  { id: 'passport', input: 'Passport: AB1234567', shouldMatch: true },
+  { id: 'trade_lic', input: 'region = cn-north-1', shouldMatch: false },
+  { id: 'trade_lic', input: 'TL-ABCDEFG', shouldMatch: false }, // no digit
+  { id: 'trade_lic', input: 'Licence CN-1234567', shouldMatch: true },
+  { id: 'email', input: 'logo@2x.png', shouldMatch: false },
+  { id: 'email', input: 'icon@3x.svg', shouldMatch: false },
+  { id: 'email', input: 'x@company.md', shouldMatch: true }, // .md is Moldova's TLD
+  { id: 'date', input: 'Invoice date 15/01/2024', shouldMatch: false },
+  { id: 'date', input: 'Due: 01/02/2025', shouldMatch: false },
+  { id: 'date', input: 'Invoice for patient born 15/03/1990', shouldMatch: true },
+  { id: 'date', input: 'Joined 15/03/2019', shouldMatch: true }, // unlabelled dates stay flagged
+  { id: 'intl_phone', input: 'SKU 8971501234567', shouldMatch: false },
+  { id: 'intl_phone', input: '00971501234567', shouldMatch: true },
+  // Credit cards need a Luhn check digit, and a bare digit run a network prefix (issue #6)
+  { id: 'cc', input: 'card 4111 1111 1111 1111', shouldMatch: true },
+  { id: 'cc', input: '4111111111111111', shouldMatch: true },
+  { id: 'cc', input: 'Amex 3782 822463 10005', shouldMatch: true },
+  { id: 'cc', input: 'card 4111-1111-1111-1112', shouldMatch: false }, // fails Luhn
+  { id: 'cc', input: '{"created_at": 1727366400000}', shouldMatch: false }, // ms timestamp
+  { id: 'cc', input: 'Order #4000123456789 shipped', shouldMatch: false },
+  { id: 'cc', input: '784198812345670', shouldMatch: false }, // an Emirates ID, not a card
+  // Emirates ID with spaces or no separator (issue #10)
+  { id: 'national_id', input: 'EID 784 1990 1234567 1', shouldMatch: true },
+  { id: 'national_id', input: 'EID 784199012345671', shouldMatch: true },
+  { id: 'national_id', input: 'رقم الهوية: 784199012345671', shouldMatch: true },
+  { id: 'national_id', input: 'ref 784198812345670', shouldMatch: true }, // passes the checksum
+  { id: 'national_id', input: 'ref 784199012345671', shouldMatch: false }, // no checksum, no label
+  { id: 'national_id', input: 'ref 784-1990 1234567-1', shouldMatch: false }, // mixed separators
+  // IBANs from every other country (issue #9)
+  { id: 'iban', input: 'IBAN SA0380000000608010167519', shouldMatch: true },
+  { id: 'iban', input: 'IBAN GB29 NWBK 6016 1331 9268 19', shouldMatch: true },
+  { id: 'iban', input: 'DE89 3704 0044 0532 0130 00', shouldMatch: true },
+  { id: 'iban', input: 'FR14 2004 1010 0505 0001 3M02 606', shouldMatch: true },
+  { id: 'iban', input: 'GB82WEST12345698765433', shouldMatch: false }, // bad checksum
+  { id: 'iban', input: 'XX82WEST12345698765432', shouldMatch: false }, // not an IBAN country
+  { id: 'iban', input: 'AE070331234567890123456', shouldMatch: false }, // left to uae_iban
   { id: 'non_latin_name', input: 'العميل محمد أحمد المنصوري', shouldMatch: true },
   { id: 'email', input: 'user@example.com', shouldMatch: true },
   { id: 'email', input: 'not an email', shouldMatch: false },
@@ -82,6 +122,25 @@ function runPatternTests() {
     }
   }
 
+  // An IBAN's span ends at its country's length, not at the next word (issue #9),
+  // and a no-dash Emirates ID is classed as an ID, not as a card (issue #10).
+  {
+    const spans = [
+      ['GB82 WEST 1234 5698 7654 32 USD', 'iban', 'GB82 WEST 1234 5698 7654 32'],
+      ['pay GB82WEST12345698765432.', 'iban', 'GB82WEST12345698765432'],
+      ['EID 784198812345670', 'national_id', '784198812345670'],
+    ];
+    for (const [text, id, want] of spans) {
+      const got = maskText(text).findings.map((f) => `${f.id}:${f.original}`);
+      if (got.length === 1 && got[0] === `${id}:${want}`) {
+        passed++;
+      } else {
+        console.error(`FAIL span ${JSON.stringify(text)}: expected ${id}:${want}, got ${JSON.stringify(got)}`);
+        failed++;
+      }
+    }
+  }
+
   // Overlap test
   const overlap = maskText('john.5551234567@example.com', { enabled: ['email', 'phone'] });
   if (overlap.findings.length >= 1) {
@@ -140,7 +199,7 @@ function runPatternTests() {
   // -------------------------------------------------------------------------
   const MULTILINE_BY_DESIGN = new Set(['ssh_key']);
   for (const p of PATTERNS) {
-    if (MULTILINE_BY_DESIGN.has(p.id)) continue;
+    if (MULTILINE_BY_DESIGN.has(p.id) || !p.rx) continue;
     // Strip character classes that legitimately contain \s as a NEGATED
     // terminator (e.g. [^\s"'<>]) and the env_secret leading lookbehind, which
     // must allow a newline before a KEY.
@@ -217,6 +276,48 @@ function runPatternTests() {
     ['# PASSWORD is required', false],
     ['TOKENIZER=bpe', false],
     ['HF_TOKENIZER=gpt2', false],
+    // Quoted keys, XML, PHP and command-line flags (issue #3). Each of these
+    // used to be missed because the key had to follow whitespace or `,;({[`.
+    ['{"password": "hunter2prod"}', true],
+    ['{"db": {"password": "hunter2prod"}}', true],
+    ['"password":"hunter2prod"', true],
+    ["{'password': 'hunter2prod'}", true],
+    ['  "client_secret": "abc123secretvalue",', true],
+    ['<password>hunter2prod</password>', true],
+    ['<Password>hunter2prod</Password>', true],
+    ['<add key="ApiKey" value="abc123secretvalue"/>', true],
+    ['<setting name="DbPassword" value="hunter2prod" />', true],
+    ['$password = "hunter2prod";', true],
+    ['mysql --password=hunter2prod -u root', true],
+    ['echo "TOKEN=abc123xyz"', true],
+    // ...without new false alarms
+    ['{"password": ""}', false],
+    ['{"password": null}', false],
+    ['{"token": true}', false],
+    ['{"passwordPolicy": {"minLength": 8}}', false],
+    ['{"X-Signature": HMAC_SECRET}', false], // a variable reference in code
+    ['<password></password>', false],
+    ['<password>[ENV_SECRET_1]</password>', false], // already masked
+    ['<add key="ApiKey" value="[ENV_SECRET_1]"/>', false],
+    // Properties of a secret, references and placeholders are not secrets (issue #7)
+    ['max_tokens: 1024', false],
+    ['maxTokens: 2048', false],
+    ['token_type: bearer', false],
+    ['PASSWORD_MIN_LENGTH=12', false],
+    ['TOKEN_TTL=3600', false],
+    ['password: ${DB_PASSWORD}', false],
+    ['API_KEY=$API_KEY', false],
+    ['token: {{ secrets.GH_TOKEN }}', false],
+    ['password: <your-password>', false],
+    ['OPENAI_API_KEY=sk-proj-...', false],
+    ['SECRET_KEY=changeme', false],
+    ['DB_HOST=localhost', false],
+    ['DB_HOST=127.0.0.1:5432', false],
+    // ...while real values stay flagged
+    ['DB_PASSWORD=123456', true],
+    ['password: password', true],
+    ['DB_HOST=db.internal.acme.net', true],
+    ['AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjEAAa', true],
   ];
   for (const [text, shouldMatch] of envSecretCases) {
     const { findings } = maskText(text, { enabled: ['env_secret'] });
@@ -224,6 +325,147 @@ function runPatternTests() {
       passed++;
     } else {
       console.error(`FAIL env_secret ${JSON.stringify(text)}: expected match=${shouldMatch}, got ${findings.length}`);
+      failed++;
+    }
+  }
+
+  // Only the value is replaced, and masking keeps the surrounding syntax valid.
+  {
+    const cases = [
+      ['{"password": "hunter2prod"}', (m) => JSON.parse(m).password.startsWith('[ENV_SECRET_')],
+      ['<password>hunter2prod</password>', (m) => /^<password>\[ENV_SECRET_\d+\]<\/password>$/.test(m)],
+      ['echo "TOKEN=abc123xyz"', (m) => /^echo "TOKEN=\[ENV_SECRET_\d+\]"$/.test(m)],
+      ['Set `API_KEY=abc123xyz` first', (m) => /`API_KEY=\[ENV_SECRET_\d+\]`/.test(m)],
+    ];
+    for (const [text, ok] of cases) {
+      const { masked } = maskText(text, { enabled: ['env_secret'] });
+      let good = false;
+      try { good = ok(masked); } catch { good = false; }
+      if (good) {
+        passed++;
+      } else {
+        console.error(`FAIL env_secret masking broke syntax: ${JSON.stringify(text)} -> ${JSON.stringify(masked)}`);
+        failed++;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Token formats that used to pass through (issue #5), and phone numbers
+  // without separators (issue #11). Each format has a positive case and a near
+  // miss. Values are assembled at runtime so no provider-shaped token sits in
+  // this file: secret scanners would block the push. The positives run the FULL
+  // detector and check which pattern wins the span; the near misses check that
+  // the target pattern stays silent.
+  // -------------------------------------------------------------------------
+  {
+    const j = (...parts) => parts.join('');
+    const r = (n) => 'aB3dE5fG7h'.repeat(Math.ceil(n / 10)).slice(0, n);
+    const b64 = (s) => Buffer.from(s).toString('base64');
+    const HEX32 = j('5d41402abc4b2a76', 'b9719d911017c592');
+    const AWS_ID = j('AK', 'IA', 'ABCDEFGHIJKLMNOP');
+    const AWS_SECRET = j('wJal', 'rXUtnFEMI/K7MDENG/bPxRfiCY', 'EXAMPLEKEY');
+    const pem = (type) => `-----BEGIN ${type}-----\nMIIabc\n-----END ${type}-----`;
+    // [text, pattern id, the span it must replace (null: must not match)]
+    const formatCases = [
+      [`token ${j('github', '_pat_', r(22), '_', r(59))}`, 'gh_token', j('github', '_pat_', r(22), '_', r(59))],
+      [`token ${j('github', '_pat_', 'short')}`, 'gh_token', null],
+      [`token ${j('gl', 'pat-', r(20))}`, 'gitlab_token', j('gl', 'pat-', r(20))],
+      [`runner ${j('gl', 'rt-', r(24))}`, 'gitlab_token', j('gl', 'rt-', r(24))],
+      [`see the ${j('gl', 'pat-', 'docs')} page`, 'gitlab_token', null],
+      [`key=${j('AI', 'za', r(35))}&q=1`, 'google_api_key', j('AI', 'za', r(35))],
+      [`key ${j('AI', 'za', r(36))}`, 'google_api_key', null], // one character too long
+      [`x ${j('rk', '_live_', r(24))}`, 'stripe', j('rk', '_live_', r(24))],
+      [`x ${j('wh', 'sec_', r(32))}`, 'stripe', j('wh', 'sec_', r(32))],
+      [`x ${j('rk', '_live_', 'short')}`, 'stripe', null],
+      [`x ${j('S', 'G.', r(22), '.', r(43))}`, 'sendgrid_key', j('S', 'G.', r(22), '.', r(43))],
+      [`x ${j('S', 'G.', r(22), '.', r(40))}`, 'sendgrid_key', null],
+      [`x ${j('np', 'm_', r(36))}`, 'npm_token', j('np', 'm_', r(36))],
+      [`x ${j('np', 'm_', r(35))}`, 'npm_token', null],
+      ['npm_config_cache_directory_setting_x', 'npm_token', null],
+      [`post ${j('https://hooks.', 'slack.com/services/', 'T0ABCDEFG/B0ABCDEFG/', r(24))}`, 'slack_webhook',
+        j('https://hooks.', 'slack.com/services/', 'T0ABCDEFG/B0ABCDEFG/', r(24))],
+      ['see https://hooks.slack.com/ for setup', 'slack_webhook', null],
+      [`AccountName=acct;${j('Account', 'Key=', r(86), '==')};EndpointSuffix=core.windows.net`, 'azure_storage_key', j(r(86), '==')],
+      [`Endpoint=sb://x/;${j('SharedAccess', 'Key=', r(43), '=')}`, 'azure_storage_key', j(r(43), '=')],
+      ['AccountName=acct;AccountKey=;', 'azure_storage_key', null],
+      [`Authorization: Basic ${b64('admin:hunter22')}`, 'basic_auth', `Basic ${b64('admin:hunter22')}`],
+      [`curl -H "authorization: basic ${b64('svc:pa55word')}"`, 'basic_auth', `basic ${b64('svc:pa55word')}`],
+      ['Basic understanding of algorithms is required', 'basic_auth', null],
+      [`Authorization: Basic ${b64('test')}`, 'basic_auth', null], // no user:password inside
+      [`Access key ID,Secret access key\n${AWS_ID},${AWS_SECRET}`, 'aws_secret', AWS_SECRET],
+      [`aws secret: ${AWS_SECRET}`, 'aws_secret', AWS_SECRET],
+      [`value ${AWS_SECRET}`, 'aws_secret', null], // no key id or label nearby
+      [`aws ${'a1b2c3d4e5'.repeat(4)}`, 'aws_secret', null], // no upper case: not base64 key material
+      [pem('ENCRYPTED PRIVATE KEY'), 'ssh_key', pem('ENCRYPTED PRIVATE KEY')],
+      [pem('DSA PRIVATE KEY'), 'ssh_key', pem('DSA PRIVATE KEY')],
+      [pem('PGP PRIVATE KEY BLOCK'), 'ssh_key', pem('PGP PRIVATE KEY BLOCK')],
+      [pem('PGP PUBLIC KEY BLOCK'), 'ssh_key', null],
+      ['-----BEGIN DSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----', 'ssh_key', null],
+      [`api key: ${HEX32}`, 'hex_secret', HEX32],
+      [`curl -H "X-Auth: ${HEX32}"`, 'hex_secret', HEX32],
+      [`md5: ${HEX32}`, 'hex_secret', null],
+      [`request id ${HEX32}`, 'hex_secret', null],
+      [HEX32, 'hex_secret', null],
+      // issue #11
+      ['call +447946095812 now', 'phone', '+447946095812'],
+      ['mobile +966501234567', 'phone', '+966501234567'],
+      ['tel 020 7946 0958', 'phone', '020 7946 0958'],
+      ['Phone: 0161 496 0000', 'phone', '0161 496 0000'],
+      ['هاتف 020 7946 0958', 'phone', '020 7946 0958'],
+      ['ref 020 7946 0958', 'phone', null], // national grouping without a phone label
+      ['ts 1727366400000', 'phone', null],
+      ['order 4000123456789', 'phone', null],
+      ['x+447946095812', 'phone', null],
+      ['offset +1234567', 'phone', null], // too short
+      ['+971501234567', 'phone', null], // left to intl_phone
+    ];
+    for (const [text, id, want] of formatCases) {
+      const got = want === null
+        ? maskText(text, { enabled: [id] }).findings.map((f) => f.original)
+        : maskText(text).findings.filter((f) => f.original === want).map((f) => f.id);
+      const ok = want === null ? got.length === 0 : got.length === 1 && got[0] === id;
+      if (ok) {
+        passed++;
+      } else {
+        console.error(`FAIL ${id} ${JSON.stringify(text.slice(0, 60))}: expected ${want === null ? 'no match' : 'a match'}, got ${JSON.stringify(got)}`);
+        failed++;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // hex_secret vs hashes (issue #4). A git commit is 40 hex characters and a
+  // SHA-256 checksum 64, so every changelog, lockfile and CI log read as a
+  // credential and the Guardian demanded approval for harmless files.
+  // -------------------------------------------------------------------------
+  const SHA1 = ['9fceb02d0ae598e9', '5dc970b74767f193', '72d61af8'].join('');
+  const SHA256 = ['e3b0c44298fc1c149afbf4c8996fb924', '27ae41e4649b934ca495991b7852b855'].join('');
+  const hexCases = [
+    // hashes in hash context: not secrets
+    [`- Fixed login redirect (${SHA1})`, false],
+    [`commit ${SHA1}`, false],
+    [`${SHA1} Merge pull request #3`, false],
+    [`${SHA256}  dist/app.tar.gz`, false],
+    [`image: node@sha256:${SHA256}`, false],
+    [`sha256: ${SHA256}`, false],
+    [`https://github.com/o/r/commit/${SHA1}`, false],
+    [`see #${SHA1}`, false],
+    // secrets: still flagged, even at hash lengths
+    [`the signing secret is ${SHA1}`, true],
+    [`token for commit ${SHA1}`, true],
+    [`secret: (${SHA1})`, true],
+    [`${SHA1}  # prod api key`, true],
+    [SHA1, true],
+    // non-standard lengths are not hash references
+    [`commit ${SHA1}abcd`, true],
+  ];
+  for (const [text, shouldMatch] of hexCases) {
+    const { findings } = maskText(text, { enabled: ['hex_secret'] });
+    if ((findings.length > 0) === shouldMatch) {
+      passed++;
+    } else {
+      console.error(`FAIL hex_secret ${JSON.stringify(text)}: expected match=${shouldMatch}, got ${findings.length}`);
       failed++;
     }
   }
@@ -242,6 +484,8 @@ function runPatternTests() {
     // The match includes the surrounding SQL clause; the fake is only the quoted
     // value, which is correct for substitution but not self-detecting.
     sql_password: 'fake is the value only; the pattern needs its SQL context',
+    azure_storage_key: 'fake is the value only; the pattern needs its AccountKey= context',
+    aws_secret: 'a bare 40-character key needs a key id or label nearby to count',
   };
   for (const p of PATTERNS) {
     if (!p.fakeValues || FAKE_EXEMPT[p.id]) { passed++; continue; }

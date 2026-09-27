@@ -39,3 +39,10 @@ PROJECT_SUMMARY.md
 # Generated metric evidence sheets — kept locally, not published to the repo.
 # Rebuild at any time with `npm run docs:metrics`.
 docs/evidence/
+
+# Generated documents -- built by `npm run docs:pdf` / `npm run docs:deck` and
+# attached to each GitHub release by .github/workflows/release-docs.yml.
+docs/TECHNICAL_IMPLEMENTATION.pdf
+presentation/Kakashi_Manager_Briefing.fodp
+presentation/Kakashi_Manager_Briefing.pptx
+presentation/Kakashi_Manager_Briefing.pdf

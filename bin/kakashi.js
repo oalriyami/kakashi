@@ -233,10 +233,15 @@ program
     console.log(chalk.cyan(`\n${BRAND} -- batch mask`));
     console.log(chalk.gray(`   ${files.length} file(s) in ${directory}\n`));
     let totalFindings = 0;
+    // One token map for the whole run, as db-mask shares one across rows: the
+    // same value gets the same token in every file, and different values never
+    // share one. Per-file maps made `[EMAIL_1]` a different person in each file.
+    const valueMap = {};
+    const counters = {};
     for (const file of files) {
       try {
         const data = await formats.readFile(file);
-        const { masked, findings } = maskText(data.text, { mode: options.mode || 'typed' });
+        const { masked, findings } = maskText(data.text, { mode: options.mode || 'typed', valueMap, counters });
         if (findings.length === 0) continue;
         const outputPath = formats.defaultOutputPath(file);
         const replMap = {};
@@ -532,7 +537,10 @@ program
 
     if (options.json) {
       // The audit event is already value-free by construction, which makes it
-      // exactly the right payload to hand back to a calling agent.
+      // exactly the right payload to hand back to a calling agent. `plan` and
+      // `verifications` are the fields the installed agent rules tell agents to
+      // narrate from; both hold classes, tools, reason codes and counts only.
+      // agent-rules.test.js fails if a field the rules name goes missing.
       console.log(JSON.stringify({
         decision: result.decision,
         reasonCode: result.reasonCode,
@@ -540,6 +548,8 @@ program
         risk: result.risk,
         iterations: result.iterations,
         task: result.state.context.taskAnalysis.toJSON(),
+        plan: result.plan || { actions: [], meta: null },
+        verifications: result.verifications.map(({ observation, ...v }) => v),
         verificationPassed: result.auditEvent.verificationPassed,
         approvalsNeeded: result.approvalsNeeded,
         event: result.auditEvent,

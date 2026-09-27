@@ -25,7 +25,7 @@ Reinforces the **"Agentic AI Solutions Developed in the UAE"** category story by
 | 4 | 15–22 | Same terminal running `kakashi scan long_contract.pdf` — findings pop up including a buried API key on "page 23" | "Even buried on page 23 — Kakashi finds it." | "حتى المدفون في الصفحة 23 — Kakashi يجده." | "Even on page 23 — Kakashi catches it." |
 | 5 | 22–32 | `kakashi mask` runs on both files; `masked_customers_uae.csv` and `masked_long_contract.md` appear in the file manager | "Writes a safe-to-share version. The original stays untouched." | "يكتب نسخة آمنة للمشاركة. الأصل يبقى دون تغيير." | "Writes a safe copy. Original untouched." |
 | 6 | 32–45 | Split-screen diff: original vs masked. Names → `[NON_LATIN_NAME_1]`, Emirates IDs → `[NATIONAL_ID_1]`, IBANs → `[UAE_IBAN_1]`, API keys → `[OPENAI_KEY_1]` | "Real data becomes typed tokens. Consistent across the file." | "بيانات حقيقية تتحول إلى رموز مطبعة. متسقة في الملف." | "Real data → typed tokens. Consistent." |
-| 7 | 45–55 | Cursor / Claude chat window: typing `/kakashi-mask /path/to/file` — result renders inline. Cut to `kakashi agent-guard --watch ./project` running in a terminal, showing an HTTP GET /health response | "Inside 20+ AI agents. Plus a local privacy daemon any agent can consult." | "داخل أكثر من 20 وكيل ذكاء اصطناعي. بالإضافة إلى خدمة خصوصية محلية." | "20+ agents + local privacy daemon." |
+| 7 | 45–55 | Cursor / Claude chat window: typing `/kakashi-mask /path/to/file` — result renders inline. Cut to `kakashi agent-guard --watch ./project` running in a terminal, showing an HTTP GET /health response | "Inside Claude, Cursor, Codex, Copilot and more. Plus a local privacy daemon any agent can consult." | "داخل Claude و Cursor و Codex و Copilot وغيرها. بالإضافة إلى خدمة خصوصية محلية." | "7 agents + local privacy daemon." |
 | 8 | 55–60 | End card: Kakashi mask logo · UAE flag icon · text: "Sovereign privacy for agentic AI. `npm install -g @muhammadatef/kakashi`. Made in the UAE." | "Sovereign privacy for agentic AI. Open source. Made in the UAE." | "خصوصية سيادية للذكاء الاصطناعي. مفتوح المصدر. صُنع في الإمارات." | "Sovereign privacy. Made in the UAE." |
 
 ---
@@ -42,7 +42,7 @@ Reinforces the **"Agentic AI Solutions Developed in the UAE"** category story by
 >
 > It writes a safe-to-share version. The original stays untouched. Real data becomes typed tokens, consistent across the file.
 >
-> Kakashi lives inside 20+ AI agents — Cursor, Claude, Copilot, Codex — plus a local privacy daemon any agent can consult before shipping data.
+> Kakashi lives inside seven AI agents — Cursor, Claude, Copilot, Codex and more — plus a local privacy daemon any agent can consult before shipping data.
 >
 > Sovereign privacy for agentic AI. Open source. Made in the UAE."
 
@@ -56,7 +56,7 @@ Reinforces the **"Agentic AI Solutions Developed in the UAE"** category story by
 >
 > يكتب نسخة آمنة للمشاركة. الأصل يبقى دون تغيير. بيانات حقيقية تتحول إلى رموز مطبعة، متسقة في الملف.
 >
-> Kakashi يعيش داخل أكثر من 20 وكيل ذكاء اصطناعي — Cursor و Claude و Copilot و Codex — بالإضافة إلى خدمة خصوصية محلية يمكن لأي وكيل استشارتها قبل شحن البيانات.
+> Kakashi يعيش داخل سبعة وكلاء ذكاء اصطناعي — Cursor و Claude و Copilot و Codex وغيرها — بالإضافة إلى خدمة خصوصية محلية يمكن لأي وكيل استشارتها قبل شحن البيانات.
 >
 > خصوصية سيادية للذكاء الاصطناعي. مفتوح المصدر. صُنع في الإمارات."
 

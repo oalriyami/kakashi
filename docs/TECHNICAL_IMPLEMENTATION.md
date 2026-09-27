@@ -2,7 +2,13 @@
 
 **Version 1.1.0 · September 2026**
 
-> **Cover copy for the printable PDF:** see [`TECHNICAL_IMPLEMENTATION.html`](TECHNICAL_IMPLEMENTATION.html) (Chrome-optimised, A4, 16 pages) and the pre-rendered [`TECHNICAL_IMPLEMENTATION.pdf`](TECHNICAL_IMPLEMENTATION.pdf) in this folder.
+> **Snapshot.** This document, its HTML and its PDF describe Kakashi 1.1.0 and
+> are kept as they were published. Its figures (35 patterns, 101 tests, "20+"
+> agents, six commands) are out of date. For the current system see
+> [ARCHITECTURE.md](ARCHITECTURE.md), [AGENTIC_ARCHITECTURE.md](AGENTIC_ARCHITECTURE.md)
+> and the [README](../README.md).
+
+> **Cover copy for the printable PDF:** see [`TECHNICAL_IMPLEMENTATION.html`](TECHNICAL_IMPLEMENTATION.html) (Chrome-optimised, A4, 16 pages) Build the PDF with `npm run docs:pdf`; each GitHub release also carries it.
 >
 > This Markdown file is the GitHub-readable source of truth for the same content.
 

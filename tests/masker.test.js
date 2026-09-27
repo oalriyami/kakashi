@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { maskText } = require('../src/engine/masker');
+const { maskText, lineAtOffset } = require('../src/engine/masker');
 
 function runMaskerTests() {
   let passed = 0;
@@ -151,6 +151,65 @@ function runMaskerTests() {
       const { findings } = maskText(t, { enabled: ['env_secret'] });
       assert.strictEqual(findings.length, 0, `${t} re-detected as a secret`);
     }
+  });
+
+  // Fake mode gives every distinct original its own fake (issue #15).
+  check('fake mode: distinct originals get distinct fakes, listed fakes first', () => {
+    const text = ['sara', 'omar', 'layla', 'noor', 'huda'].map((n) => `${n}@corp.ae`).join('\n');
+    const { masked } = maskText(text, { enabled: ['email'], mode: 'fake' });
+    const fakes = masked.split('\n');
+    assert.strictEqual(new Set(fakes).size, 5, fakes.join(', '));
+    assert.deepStrictEqual(fakes.slice(0, 2), ['user_a@example.com', 'user_b@example.org']);
+    for (const f of fakes) assert(maskText(f, { enabled: ['email'] }).findings.length === 1, `${f} undetectable`);
+    // Deterministic: the same input gives the same fakes.
+    assert.strictEqual(maskText(text, { enabled: ['email'], mode: 'fake' }).masked, masked);
+  });
+
+  check('fake mode: every pattern gives 1,000 distinct fakes', () => {
+    const { fakeValue } = require('../src/engine/fakes');
+    const { PATTERNS } = require('../src/engine/patterns');
+    for (const p of PATTERNS) {
+      const values = Array.from({ length: 1000 }, (_, i) => fakeValue(p.id, i + 1, p.fakeValues));
+      assert.strictEqual(new Set(values).size, 1000, `${p.id} repeats a fake`);
+    }
+  });
+
+  check('fake mode: generated identifiers can never be live', () => {
+    const { fakeValue } = require('../src/engine/fakes');
+    const { isValidEmiratesId, luhnCheck, isValidIban, PATTERNS } = require('../src/engine/patterns');
+    const fake = (id, n) => fakeValue(id, n, PATTERNS.find((p) => p.id === id).fakeValues);
+    for (let n = 3; n < 200; n++) {
+      assert(!isValidEmiratesId(fake('national_id', n)), 'a generated Emirates ID passes its checksum');
+      const card = fake('cc', n).replace(/\D/g, '');
+      assert(card.startsWith('411111') && luhnCheck(card), `card ${card} outside the test range`);
+      assert(/^GB\d\dZZZZ/.test(fake('iban', n)) && isValidIban(fake('iban', n)), 'IBAN not on the fictional bank');
+      assert(/^\d{3}-00-\d{4}$/.test(fake('ssn', n)), 'SSN not in the never-issued group 00');
+      assert(fake('ip', n).startsWith('10.'), 'IP outside the private range');
+    }
+  });
+
+  // Line numbers and output assembly are done in one forward pass (issue #13).
+  check('line numbers match lineAtOffset across LF, CRLF, blank lines and a long line', () => {
+    const text = [
+      'a@b.co', '', 'x', 'API_KEY=abc123xyz\r', 'c@d.ee e@f.gg', '\n\n', `${'z '.repeat(500)}h@i.jj`, 'k@l.mm',
+    ].join('\n');
+    const { findings, masked } = maskText(text, { enabled: ['email', 'env_secret'] });
+    assert(findings.length >= 6, `only ${findings.length} findings`);
+    for (const f of findings) assert.strictEqual(f.line, lineAtOffset(text, f.offset), `${f.original} at ${f.offset}`);
+    assert.strictEqual(masked.split('\n').length, text.split('\n').length, 'line count changed');
+    for (const f of findings) assert(!masked.includes(f.original), `${f.original} survived`);
+  });
+
+  check('masking scales linearly with input size', () => {
+    // Quadratic masking took ~35 s for this input; linear takes well under
+    // 100 ms. The bound is deliberately loose so slow CI machines don't flake.
+    const text = Array.from({ length: 20000 }, (_, i) => `{"id": ${i}, "email": "user${i}@example.com"}`).join('\n');
+    const t0 = process.hrtime.bigint();
+    const { findings } = maskText(text, { enabled: ['email'] });
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.strictEqual(findings.length, 20000);
+    assert.strictEqual(findings[19999].line, 20000);
+    assert(ms < 3000, `20,000 findings took ${ms.toFixed(0)} ms`);
   });
 
   console.log(`masker.test.js: ${passed} passed, ${failed} failed`);

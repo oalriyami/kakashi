@@ -92,6 +92,7 @@ const PATTERN_TO_ARTICLES = {
   non_latin_name: ['Art. 1', 'Art. 5'],
   unified_id:     ['Art. 1', 'Art. 15', 'Art. 22'],
   uae_iban:       ['Art. 1', 'Art. 15', 'Art. 20', 'Art. 22'],
+  iban:           ['Art. 1', 'Art. 15', 'Art. 20', 'Art. 22'],
   // ---- Personal Info -------------------------------------------------------
   email:          ['Art. 1', 'Art. 5', 'Art. 22'],
   phone:          ['Art. 1', 'Art. 5', 'Art. 22'],
@@ -115,7 +116,15 @@ const PATTERN_TO_ARTICLES = {
   gh_token:         ['Art. 20', 'Art. 21'],
   slack:            ['Art. 20', 'Art. 21'],
   stripe:           ['Art. 20', 'Art. 21'],
+  gitlab_token:     ['Art. 20', 'Art. 21'],
+  google_api_key:   ['Art. 20', 'Art. 21'],
+  sendgrid_key:     ['Art. 20', 'Art. 21'],
+  npm_token:        ['Art. 20', 'Art. 21'],
+  slack_webhook:    ['Art. 20', 'Art. 21'],
   bearer:           ['Art. 20', 'Art. 21'],
+  basic_auth:       ['Art. 20', 'Art. 21'],
+  azure_storage_key: ['Art. 20', 'Art. 21'],
+  aws_secret:       ['Art. 20', 'Art. 21'],
   db_conn:          ['Art. 20', 'Art. 21', 'Art. 22'],
   sql_password:     ['Art. 20', 'Art. 21'],
   databricks_token: ['Art. 20', 'Art. 21'],
@@ -139,6 +148,7 @@ const SEVERITY = {
   visa_id:          'critical',
   unified_id:       'critical',
   uae_iban:         'critical',
+  iban:             'critical',
   ssn:              'critical',
   cc:               'critical',
   jwt:              'critical',
@@ -150,7 +160,15 @@ const SEVERITY = {
   gh_token:         'critical',
   slack:            'critical',
   stripe:           'critical',
+  gitlab_token:     'critical',
+  google_api_key:   'critical',
+  sendgrid_key:     'critical',
+  npm_token:        'critical',
+  slack_webhook:    'critical',
   bearer:           'critical',
+  basic_auth:       'critical',
+  azure_storage_key: 'critical',
+  aws_secret:       'critical',
   db_conn:          'critical',
   sql_password:     'critical',
   databricks_token: 'critical',
@@ -188,7 +206,7 @@ function enrich(finding) {
   let checksumVerified = null; // null = not applicable
   if (finding.id === 'national_id') {
     checksumVerified = isValidEmiratesId(finding.original);
-  } else if (finding.id === 'uae_iban') {
+  } else if (finding.id === 'uae_iban' || finding.id === 'iban') {
     checksumVerified = isValidIban(finding.original);
   }
 

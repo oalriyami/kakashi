@@ -114,6 +114,50 @@ async function runGuardTests() {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
+  // -------------------------------------------------------------------------
+  // Passive scanning covers subfolders on every platform (issue #16). On Linux
+  // the watcher used to be top-level only, so a secret written to
+  // ./config/.env was never seen. Each strategy is forced in turn:
+  // native (recursive fs.watch), tree (one watcher per directory, the Node 18
+  // Linux fallback) and poll.
+  // -------------------------------------------------------------------------
+  const nodeMajor = Number(process.versions.node.split('.')[0]);
+  const strategies = ['tree', 'poll'];
+  if (process.platform !== 'linux' || nodeMajor >= 20) strategies.unshift('native');
+  for (const strategy of strategies) {
+    await check(`passive scan sees a secret in a new nested folder (${strategy})`, async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), `kakashi-guard-${strategy}-`));
+      fs.mkdirSync(path.join(root, 'existing', 'deeper'), { recursive: true });
+      const saved = { w: process.env.KAKASHI_GUARD_WATCH, p: process.env.KAKASHI_GUARD_POLL_MS };
+      process.env.KAKASHI_GUARD_WATCH = strategy;
+      process.env.KAKASHI_GUARD_POLL_MS = '100';
+      const events = [];
+      const h = await guard.start({ watch: root, port: 0, onEvent: (e) => events.push(e) });
+      try {
+        const health = JSON.parse((await get(h.port, '/health')).body);
+        assert.strictEqual(health.watchStrategy, strategy);
+        assert.strictEqual(health.watchRecursive, true);
+
+        // A file in a pre-existing subfolder, and one in a folder created now.
+        await new Promise((r) => setTimeout(r, 150));
+        fs.writeFileSync(path.join(root, 'existing', 'deeper', 'a.env'), `EMAIL=${TEST_EMAIL}\n`);
+        fs.mkdirSync(path.join(root, 'config', 'prod'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'config', 'prod', '.env'), `ID=${TEST_NATIONAL_ID}\n`);
+
+        const want = [path.join('existing', 'deeper', 'a.env'), path.join('config', 'prod', '.env')];
+        const deadline = Date.now() + 4000;
+        const seen = () => want.every((p) => events.some((e) => e.kind === 'passive_scan' && e.path === p && e.findings > 0));
+        while (!seen() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+        assert(seen(), `missing passive scans; saw ${JSON.stringify(events.filter((e) => e.kind === 'passive_scan').map((e) => e.path))}`);
+      } finally {
+        await h.stop();
+        if (saved.w === undefined) delete process.env.KAKASHI_GUARD_WATCH; else process.env.KAKASHI_GUARD_WATCH = saved.w;
+        if (saved.p === undefined) delete process.env.KAKASHI_GUARD_POLL_MS; else process.env.KAKASHI_GUARD_POLL_MS = saved.p;
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
   console.log(`guard.test.js: ${passed} passed, ${failed} failed`);
   return failed === 0;
 }

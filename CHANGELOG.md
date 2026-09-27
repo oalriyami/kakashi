@@ -6,6 +6,222 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+**Name detection, phase 1: read the structure first.** Names were found only
+when written in Title Case (Latin) or as any run of Arabic words, so names in
+capitals, lower case or on their own were missed, while places, products and
+headings were masked. On a new benchmark of 16 names in 7 contexts, recall
+goes from 54/112 to 108/112 and false alarms on 27 person-free texts from 19
+to 3.
+
+### Added
+
+- **Person fields** ([src/engine/person-fields.js](src/engine/person-fields.js)).
+  A value under a person-like key is a name whatever its case, script or
+  length: JSON / JS / Python keys (`"full_name": "…"`), label and YAML lines
+  (`Name: …`), assignments (`customerName = "…"`), and header columns in CSV,
+  TSV, Markdown tables and spreadsheets. Strong keys (`full_name`,
+  `surname`, `employee_name`, `الاسم الكامل`) accept any name-shaped value;
+  weak keys (`name`, `owner`, `الاسم`) need a value that looks like a person on
+  its own, unless most of that key's values do. Thing keys (`company_name`,
+  `file_name`, `host_name`) are ignored. Findings use the `full_name` id and
+  `[FULL_NAME_n]` tokens, so the Guardian's classes are unchanged.
+- **Name benchmark in CI** ([tests/names.test.js](tests/names.test.js)).
+  Recall and false alarms are asserted against floors that may only rise.
+- **Eight more credential formats** (#5). New patterns: `gitlab_token`
+  (`glpat-` and the other GitLab prefixes), `google_api_key` (`AIza…`),
+  `sendgrid_key` (`SG.….…`), `npm_token` (`npm_…`), `slack_webhook`
+  (`https://hooks.slack.com/services/…`), `azure_storage_key` (only the key in
+  `AccountKey=` / `SharedAccessKey=`, so the connection string stays readable),
+  `basic_auth` (`Basic <base64>`, only when it decodes to `user:password`) and
+  `aws_secret` (a 40-character secret access key, only near an access key id or
+  an AWS / secret-access-key label, as in the console's credentials CSV).
+  Existing patterns now also cover fine-grained GitHub tokens (`github_pat_`),
+  Stripe restricted keys and webhook secrets (`rk_live_`, `whsec_`), encrypted
+  PKCS#8, DSA and PGP private-key blocks (`ssh_key`, now labelled Private Key),
+  and 32–39-character hex keys after a key word (`api_key: 5d41…`). There are
+  now 44 patterns, all classified `CREDENTIAL` and cited under PDPL Art. 20
+  and 21.
+- **Name detection, phase 2: a local name list** (#12). On the name
+  benchmark, which now has 11 contexts and 43 person-free texts, recall is
+  176/176 and false alarms 0/43. Phase 1 gave 108/112 on its 7 contexts and
+  3/27 false alarms.
+  - [src/engine/names.js](src/engine/names.js) loads about 49,000 given and
+    69,000 family names from Wikidata (CC0), built by `npm run names:build`
+    into a 288 KB file. It also loads a regional supplement
+    ([src/engine/data/names-supplement.json](src/engine/data/names-supplement.json))
+    with Gulf, South Asian and Filipino names and Gulf family names.
+  - Words are compared after normalisation: case, accents, `Al-` / `ال`, and
+    the Arabic hamza, taa marbuta, alef maqsura, tatweel and diacritics.
+  - Names that are also everyday words are marked ambiguous (`will`, `hope`,
+    `price`; `أمل`, `نور`). The English ones are taken from subtitle word
+    frequencies: a name counts as ambiguous when the word is written in lower
+    case more often than not. Ambiguous names need other evidence.
+  - **Arabic prose is no longer a name.** `non_latin_name` used to match any
+    run of two Arabic words. A span must now start at a listed given name (or
+    `عبد` / `أبو` / `أم` and a name), and it continues through listed names,
+    `بن` / `بنت` / `آل`, and Gulf family names (`الكعبي`). On this
+    repository's own Arabic docs, findings drop from 169 to 7, all of them
+    names.
+  - **Title Case names** may contain particles, hyphens and apostrophes
+    (`Abdulla bin Rashid`, `Jose dela Cruz`, `Fatima Al-Kaabi`,
+    `James O'Brien`). They no longer swallow a greeting or title
+    (`Dear Customer` is not a name; in `Dr Kumar` only `Kumar` is masked) or a
+    sentence opener (`Today Rajesh Kumar` → `Rajesh Kumar`). Hyphenated
+    headings such as `Real-World Validation` are not names.
+  - **Names without Title Case or a cue:** lower-case and ALL-CAPS names in
+    text (`reassigned to priya nair`), a single name after a greeting or title
+    (`Thanks, Fatima`, `Kind regards,\nAnil`, `Dr Kumar`, `السيد راشد`), and a
+    first or last name that repeats a full name found elsewhere in the same
+    text.
+  - **Product catalogues:** a value under a weak key like `name` must contain
+    a listed name, so `wireless mouse` and `USB CABLE` rows are not people.
+  - **Confidence levels:** name findings carry `confidence`: `high` (a field
+    or cue), `medium` (the name list) or `low` (Title Case only).
+    `maskText({ minConfidence })` filters on it, and each Guardian destination
+    can set `minNameConfidence`, which observe, execute and verify all apply.
+    Every destination defaults to `low`, so today's behaviour is unchanged.
+  - Masking a 620 KB prose file takes about 0.3 s instead of 0.1 s, while
+    finding twice as many names in it. The list loads in about 50 ms, the
+    first time it is used.
+- **Phone numbers without separators** (#11). `phone` accepts E.164
+  (`+447946095812`, `+966501234567`), the form databases and APIs store, and
+  national numbers grouped 3-4-4 or 4-3-4 (`020 7946 0958`) after a phone label
+  (`tel`, `phone`, `mobile`, `هاتف`, …). Timestamps and order numbers, which
+  have no `+`, stay unflagged.
+
+### Changed
+
+- **Spreadsheets are read one row per line**, cells joined by ` | `, so the
+  header row labels each column. No pattern can match across the separator,
+  so every finding stays inside one cell.
+- **Places and organisations are no longer names**: `Abu Dhabi`,
+  `Sultan Bin Zayed Street`, `Gulf Logistics LLC`, `Visual Studio Code`,
+  `Finance Department`, `شارع …`, `أبو ظبي`. The veto outranks a name cue.
+- **Form headers are no longer names**: `Full Name`, `Place Of Birth`,
+  `Residence Visa`.
+- **A lighter repository** (#21). The tracked working tree drops from about
+  8.5 MB to 1.3 MB; the npm package was never affected. The 5 MB demo video
+  is no longer in the tree, and `og-card.png` (627 KB) and `logo.png` (993 KB)
+  are now `docs/assets/og-card.jpg` (60 KB) and `docs/assets/logo.png`
+  (170 KB, 512×512). Generated documents are no longer committed:
+  `npm run docs:pdf` builds the technical implementation PDF (set `CHROME` to
+  the browser binary), the new `npm run docs:deck` builds the briefing deck,
+  and `.github/workflows/release-docs.yml` builds both and attaches them to
+  every GitHub release. Working notes (`LINKEDIN.md`, `changes_23Sept.md`,
+  `commands_to_run_to_test.md`) moved to `docs/notes/`.
+
+### Fixed
+
+- **Secrets under quoted keys are detected** (#3). `env_secret` now reads
+  `{"password": "…"}` (JSON), `{'password': '…'}` (Python / JS), XML elements
+  (`<password>…</password>`) and .NET-style attributes
+  (`<add key="ApiKey" value="…"/>`), `$password = "…"` (PHP), `--password=…`
+  (command-line flags) and keys in Markdown inline code. Only the value is
+  replaced, so JSON and XML stay valid. Empty values, `null` / `true` /
+  `false`, nested objects, and bare variable references after a quoted key
+  (`{"X-Signature": HMAC_SECRET}`) are not flagged. An unquoted value now
+  stops at a quote or backtick, so masking no longer swallows the closing
+  quote of `echo "TOKEN=…"` or of inline code.
+- **Commit hashes and checksums are no longer credentials** (#4).
+  `hex_secret` skips 40-, 64- and 128-character hex strings in hash context:
+  after a cue word (`commit`, `sha256`, `checksum`, …), as a `(sha)` changelog
+  reference, in a commit URL or `@sha256:` digest, or at the start of a
+  checksum or `git log` listing line. A secret-like word on the same line
+  (`secret`, `token`, `api key`, …) keeps it flagged. A changelog citing a
+  commit now gets `ALLOW` from the Guardian instead of `REQUIRE_APPROVAL`.
+- **`guard --json` now has the fields the agent rules name** (#17). The
+  installed rules tell agents to narrate from `plan.actions` and
+  `verifications`, which the output didn't have. Both are added, value-free
+  (classes, tools, reason codes, counts). A test parses the field list out of
+  every rule file and fails if the output is missing any of them.
+- **README examples restored** (#18). The v1.3.1 README had been run through
+  the masker: commands read `kakashi db-scan "[DB_CONN_2]"`, the
+  connection-string table was unreadable, and the "What Kakashi Catches" tables
+  showed tokens on both sides of the arrow. The original example values are
+  back (live-key shapes kept truncated). A docs test fails if a token or an
+  `[…_EXAMPLE]` placeholder appears on the input side of an example again.
+- **Agent support claims match the installer** (#19). The README listed 15
+  agents ("20+") with `--only` commands, but the installer supports 7. The
+  table now lists the 7, with the `--with-init` step Cline and Copilot need, and
+  explains how other agents can use Kakashi. The installer rejects an unknown
+  `--only` id, accepts a comma-separated list, and reports an agent it couldn't
+  set up as skipped with the reason, instead of doing nothing (Cline and
+  Copilot without `--with-init`) or printing `[ok]` without writing anything
+  (Windsurf without `~/.windsurf`).
+- **Credit cards need a Luhn check digit** (#6). The `cc` pattern accepted any
+  13-19 digit number, so millisecond timestamps and order numbers were masked
+  as cards (class `FINANCIAL`). It now requires a valid Luhn check digit, and a
+  run of digits with no separators must also start with a card network's
+  prefix. The README's "Luhn-verified" note is now true.
+- **Emirates IDs are detected with spaces or no separators** (#10).
+  `784 1990 1234567 1` was missed and `784199012345671` was detected only as a
+  credit card, with the wrong class, PDPL articles and token. Both are now
+  `national_id` when they pass the Emirates ID checksum or follow a label
+  (`EID`, `Emirates ID`, `رقم الهوية`, ...). The dashed form stays lenient.
+- **IBANs from every country** (#9). A new `iban` pattern (class `FINANCIAL`)
+  covers Saudi, GCC, UK, EU and other IBANs; `uae_iban` keeps `AE`. Matches
+  must pass mod-97 and have their country's registered length, which also
+  stops a trailing word (`... 32 USD`) from being swallowed into the match.
+  There are now 36 patterns.
+- **`env_secret` no longer flags properties, references or placeholders**
+  (#7). `max_tokens: 1024`, `token_type: bearer`, `PASSWORD_MIN_LENGTH=12` and
+  `TOKEN_TTL=3600` describe a secret rather than hold one; `${DB_PASSWORD}`,
+  `$API_KEY`, `{{ secrets.X }}`, `<your-password>`, `changeme` and truncated
+  examples such as `sk-proj-...` stand in for one; and `DB_HOST=localhost` is
+  not infrastructure worth hiding. Real values stay flagged, including numeric
+  passwords, `password: password` and internal hostnames.
+- **Noisy patterns need context** (#8). `passport` and `date` reject a match
+  that follows a business-document label (invoice, order, due, …) unless a
+  passport or birth label is there, and `passport` rejects codes whose digits
+  read as a YYYYMMDD date; unlabelled values are still flagged, and so are
+  document expiry and issue dates, which are personal data in HR files. `trade_lic` is
+  case-sensitive and needs a digit (`cn-north-1` was a licence). `email`
+  rejects file names such as `logo@2x.png` (only extensions that are not real
+  TLDs). `intl_phone` no longer starts inside a longer number.
+- **`mask-dir` tokens are consistent across files** (#14). Each file used to
+  start its own token map, so `[EMAIL_1]` was a different person in every
+  file of one run. One map is now shared across the run, as `db-mask` shares
+  one across rows: the same value gets the same token (or fake) in every file.
+- **Fake mode gives every distinct original its own fake** (#15). It cycled
+  through each pattern's one or two `fakeValues`, so the third email became
+  the first email's fake. The listed fakes are still used first; after that
+  each pattern generates distinct, deterministic values in its own format
+  (`src/engine/fakes.js`). Where the format allows, generated values can never
+  be live: Emirates IDs with a wrong check digit, cards in the 411111 test
+  range, IBANs on nonexistent banks, SSNs in the never-issued group 00, IPs in
+  10.0.0.0/8 and emails on example.com.
+- **agent-guard watches subfolders on Linux** (#16). It passed
+  `recursive: false` to `fs.watch` on Linux, so a secret written to
+  `./project/config/.env` was never passively scanned, and the polling
+  fallback only listed the top level too. It now uses a recursive watch where
+  the platform has one (Linux from Node 20), one watcher per directory
+  otherwise (Linux on Node 18, adding watchers as folders appear and scanning
+  files already inside them), and a recursive walk when polling.
+  `node_modules`, `.git` and similar are skipped. `/health` adds
+  `watchStrategy` (`native` | `tree` | `poll`) and `watchRecursive`, and
+  `KAKASHI_GUARD_WATCH` forces a strategy.
+- **Architecture docs describe the current release** (#20).
+  `docs/ARCHITECTURE.md` still described v1.1 (35 patterns, six commands, 101
+  tests). It now covers v1.3 and this release: 36 patterns, the 14 commands,
+  the new engine modules and the version history. `README.ar.md` lists the 14
+  commands and 7 agents, the pilot-kit FAQ and demo script no longer claim
+  "20+ agents", and `docs/TECHNICAL_IMPLEMENTATION.md` is marked as a v1.1
+  snapshot. A docs test checks every stated pattern and command count against
+  the code.
+- **Masking is linear in file size** (#13). `maskText()` recounted lines from
+  the start of the text for every finding and rebuilt the whole string for
+  every replacement, so 8,000 JSON lines took ~6 s with one pattern and a
+  5,000-row CSV ~8 s with all patterns. Both now happen in one forward pass:
+  16 ms and 123 ms respectively. Output is byte-for-byte identical, including
+  line numbers; a test guards against a quadratic regression.
+- **Masking a short name no longer corrupts longer words.** The xlsx, docx and
+  pptx writers replaced every masked value as a plain substring, so masking
+  `Ali` would have rewritten `Alignment`. Name-like values are now replaced as
+  whole words; values containing digits or symbols (secrets) keep substring
+  replacement.
+
 ## [1.3.1] — 2026-09-23
 
 **Bug-fix release.** Closes the "`Unrecognized command '/Kakashi'`" gap on

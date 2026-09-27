@@ -1,4 +1,6 @@
 const { PATTERNS } = require('./patterns');
+const { fakeValue } = require('./fakes');
+const { meetsConfidence } = require('./name-spans');
 
 function lineAtOffset(text, offset) {
   let line = 1;
@@ -18,9 +20,11 @@ function getReplacement(match, mode, valueMap, counters) {
   if (mode === 'redact') {
     replacement = '[REDACTED]';
   } else if (mode === 'fake') {
-    const fakes = match.fakeValues || [`fake_${key}`];
+    // One distinct fake per distinct original (see fakes.js). Cycling the
+    // pattern's short fakeValues list gave the third person the first
+    // person's fake.
     counters[key] = (counters[key] || 0) + 1;
-    replacement = fakes[(counters[key] - 1) % fakes.length];
+    replacement = fakeValue(key, counters[key], match.fakeValues);
   } else {
     counters[key] = (counters[key] || 0) + 1;
     replacement = `[${key.toUpperCase()}_${counters[key]}]`;
@@ -36,6 +40,10 @@ function getReplacement(match, mode, valueMap, counters) {
  * @param {object} options
  * @param {object} [options.valueMap] - original->token map, shared across calls.
  * @param {object} [options.counters] - per-pattern token counters, shared across calls.
+ * @param {'low'|'medium'|'high'} [options.minConfidence] - drop findings whose
+ *   pattern reports a lower confidence (today: the name patterns -- Title Case
+ *   alone is 'low', the name list 'medium', a field or cue 'high'). Findings
+ *   without a confidence are always kept. Default: keep everything.
  *
  * `valueMap` and `counters` normally start empty, so a single call numbers its
  * tokens from 1 and gives the SAME original the SAME token throughout the text.
@@ -52,6 +60,7 @@ function maskText(text, options = {}) {
     patterns: patternOverride = null,
     valueMap = {},
     counters = {},
+    minConfidence = null,
   } = options;
 
   const whitelistSet = new Set(whitelist.map(String));
@@ -63,6 +72,30 @@ function maskText(text, options = {}) {
   const matches = [];
 
   for (const pattern of activePatterns) {
+    // A pattern may also find spans structurally rather than by regex --
+    // `full_name` reads the field a value sits in. Its spans compete in the
+    // same overlap resolution below as any regex match.
+    if (typeof pattern.detect === 'function') {
+      for (const span of pattern.detect(text)) {
+        if (whitelistSet.has(span.original)) continue;
+        if (!meetsConfidence(span.confidence, minConfidence)) continue;
+        matches.push({
+          id: pattern.id,
+          label: pattern.label,
+          labelAr: pattern.labelAr,
+          cat: pattern.cat,
+          original: span.original,
+          start: span.start,
+          end: span.end,
+          confidence: span.confidence,
+          fakeValues: pattern.fakeValues,
+        });
+      }
+    }
+
+    // A detect-only pattern (`iban`) has no regex of its own.
+    if (!pattern.rx) continue;
+
     // `d` (hasIndices) exposes each capture group's absolute offset, which is
     // how a pattern can match a wide context but replace only part of it.
     const flags = pattern.valueGroups && !pattern.rx.flags.includes('d')
@@ -76,6 +109,8 @@ function maskText(text, options = {}) {
       // validate() always receives the WHOLE match. env_secret's stoplist needs
       // the key name, which sits outside the span it actually replaces.
       if (pattern.validate && !pattern.validate(full, text, m.index)) continue;
+      const confidence = pattern.confidence ? pattern.confidence(full, text, m.index) : undefined;
+      if (!meetsConfidence(confidence, minConfidence)) continue;
 
       let original = full;
       let start = m.index;
@@ -102,6 +137,7 @@ function maskText(text, options = {}) {
         original,
         start,
         end,
+        confidence,
         fakeValues: pattern.fakeValues,
       });
     }
@@ -121,25 +157,38 @@ function maskText(text, options = {}) {
     }
   }
 
-  const findings = resolved.map((match) => {
+  // `resolved` is sorted by offset and non-overlapping, so one forward pass
+  // both numbers the lines and assembles the output. Doing either per finding
+  // -- recounting newlines from the start of the text, or rebuilding the whole
+  // string for each replacement -- made masking quadratic in file size: 8,000
+  // JSON lines took ~6 s with a single pattern enabled (issue #13).
+  const findings = [];
+  const parts = [];
+  let line = 1;
+  let nextNewline = text.indexOf('\n'); // first newline not yet counted
+  let copied = 0;                       // text is copied into `parts` up to here
+  for (const match of resolved) {
     const replacement = getReplacement(match, mode, valueMap, counters);
-    return {
+    while (nextNewline !== -1 && nextNewline < match.start) {
+      line++;
+      nextNewline = text.indexOf('\n', nextNewline + 1);
+    }
+    findings.push({
       id: match.id,
       label: match.label,
       labelAr: match.labelAr,
       cat: match.cat,
       original: match.original,
       replacement,
-      line: lineAtOffset(text, match.start),
+      line,
       offset: match.start,
-    };
-  });
-
-  let masked = text;
-  const sorted = [...findings].sort((a, b) => b.offset - a.offset);
-  for (const f of sorted) {
-    masked = masked.slice(0, f.offset) + f.replacement + masked.slice(f.offset + f.original.length);
+      ...(match.confidence ? { confidence: match.confidence } : {}),
+    });
+    parts.push(text.slice(copied, match.start), replacement);
+    copied = match.start + match.original.length;
   }
+  parts.push(text.slice(copied));
+  const masked = parts.join('');
 
   return { masked, findings };
 }

@@ -42,7 +42,7 @@ Everything needed to secure the first UAE reference customer (workstream B2 of t
 | "What about Word/Excel formatting?" | Kakashi reconstructs the original format. Word stays Word. Excel stays Excel. |
 | "We already use GitLeaks / TruffleHog." | Those scan git history — after leaks happen. Kakashi stops leaks at the moment of paste. |
 | "Does it cover our national identifiers?" | Native detection for Emirates ID (with Luhn checksum), UAE passport, UAE IBAN (with mod-97 checksum), UAE mobile/landline, trade licence, Arabic names. |
-| "What integrations do you have?" | 20+ agentic AI platforms including Cursor, Claude Code, Copilot, Codex, Windsurf. Any MCP-enabled agent can also query the agent-guard HTTP API. |
+| "What integrations do you have?" | The installer sets up seven agents: Claude Code, Cursor, Codex CLI, Windsurf, Cline, GitHub Copilot and Continue. Any other agent that can run a shell command can use it through a rules file, and any MCP-enabled agent can query the agent-guard HTTP API. |
 | "How do we run this at scale?" | `kakashi scan-dir` with `--parallel N` handles 100k+ file trees. A machine-readable JSON report drops into any SIEM. |
 | "Support?" | Direct maintainer support during pilot. Post-pilot: GitHub issues + a signed SLA if you want it. |
 

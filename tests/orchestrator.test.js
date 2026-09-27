@@ -6,7 +6,7 @@
  * a specific Kakashi subcommand. If those files drift and the orchestrator
  * loses one of the dispatch rows, agents will start doing the wrong thing
  * silently -- which is exactly the class of regression the plan in
- * changes_23Sept.md was written to prevent.
+ * docs/notes/changes_23Sept.md was written to prevent.
  *
  * These tests inspect the shipped text and assert that:
  *

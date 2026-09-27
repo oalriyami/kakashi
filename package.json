@@ -4,7 +4,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Sovereign privacy layer for agentic AI. Detects Emirates ID, UAE IBAN, Arabic names, plus 30+ credential and PII patterns. Client-side DB masking (Postgres, MySQL, MongoDB, Snowflake, Databricks, SQLite). Bilingual EN/AR. Works in Claude Code, Cursor, Copilot, Codex, and 20+ agents. 50+ file formats. Zero network calls.",
+  "description": "Sovereign privacy layer for agentic AI. Detects Emirates ID, UAE IBAN, Arabic names, plus 30+ credential and PII patterns. Client-side DB masking (Postgres, MySQL, MongoDB, Snowflake, Databricks, SQLite). Bilingual EN/AR. Installs into Claude Code, Cursor, Codex, Windsurf, Cline, Copilot and Continue; works in any agent that can run a shell command. 50+ file formats. Zero network calls.",
   "author": "Mohamed Atef Fahmy <muhamedfahmy7474@gmail.com> (https://github.com/Muhammadatef)",
   "license": "MIT",
   "homepage": "https://github.com/Muhammadatef/kakashi",
@@ -22,8 +22,10 @@
   "scripts": {
     "install-agents": "node bin/install.js",
     "test": "node tests/run.js",
-    "docs:pdf": "chromium --headless --disable-gpu --no-sandbox --no-pdf-header-footer --print-to-pdf=docs/TECHNICAL_IMPLEMENTATION.pdf --virtual-time-budget=5000 --run-all-compositor-stages-before-draw \"file://$PWD/docs/TECHNICAL_IMPLEMENTATION.html\"",
-    "docs:metrics": "node scripts/build-metric-evidence.js"
+    "docs:pdf": "${CHROME:-chromium} --headless --disable-gpu --no-sandbox --no-pdf-header-footer --print-to-pdf=docs/TECHNICAL_IMPLEMENTATION.pdf --virtual-time-budget=5000 --run-all-compositor-stages-before-draw \"file://$PWD/docs/TECHNICAL_IMPLEMENTATION.html\"",
+    "docs:metrics": "node scripts/build-metric-evidence.js",
+    "names:build": "node scripts/build-name-list.js",
+    "docs:deck": "node presentation/build.js && soffice --headless --convert-to pptx --outdir presentation presentation/Kakashi_Manager_Briefing.fodp && soffice --headless --convert-to pdf --outdir presentation presentation/Kakashi_Manager_Briefing.fodp"
   },
   "dependencies": {
     "xlsx": "^0.18.5",
