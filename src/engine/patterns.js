@@ -1,4 +1,6 @@
 const { createPersonFieldDetector } = require('./person-fields');
+const { createNameSpanDetectors } = require('./name-spans');
+const { isKnownName, isAmbiguousName, isGivenName } = require('./names');
 
 const NAME_STOPLIST = new Set([
   'the', 'of', 'in', 'for', 'a', 'an', 'and', 'or', 'to', 'from', 'with',
@@ -117,6 +119,15 @@ const COMMON_AR = new Set([
   'ثم', 'لكن', 'أن', 'ان', 'إن', 'كان', 'كانت', 'يكون', 'تكون', 'تم', 'يتم',
   'بعد', 'قبل', 'عند', 'حيث', 'أيضا', 'ايضا', 'فقط', 'جميع', 'بين', 'حتى',
   'لم', 'لن', 'هو', 'هي', 'هم', 'نحن', 'أنت', 'انت', 'كما', 'مثل', 'دون',
+  'أي', 'اي', 'إذا', 'اذا', 'هل', 'كيف', 'لماذا', 'ماذا', 'متى', 'أين', 'اين',
+  'عندما', 'بينما', 'لأن', 'لان', 'يمكن', 'يجب', 'نفس', 'كلا', 'أحد', 'احد',
+  // Adverbs and time words; several fold onto transliterated names
+  // (الآن "now" and آلان "Alan" share a key).
+  'الآن', 'الان', 'اليوم', 'غدا', 'غداً', 'أمس', 'امس', 'هنا', 'هناك', 'جدا', 'جداً',
+  'أكثر', 'اكثر', 'أقل', 'اقل', 'كذلك', 'دائما', 'دائماً', 'أحيانا', 'احيانا', 'ربما',
+  'معا', 'معاً', 'حاليا', 'حالياً', 'سابقا', 'لاحقا', 'مباشرة', 'قريبا', 'قريباً',
+  'يوم', 'شهر', 'سنة', 'عام', 'العام', 'الشهر', 'الأسبوع', 'الاسبوع', 'الساعة',
+  'صباحا', 'مساء', 'مساءً', 'كل', 'أول', 'اول', 'آخر', 'اخر', 'الأول', 'الاول', 'الأخير',
   // Report and compliance vocabulary
   'تقرير', 'التقرير', 'امتثال', 'الامتثال', 'بيانات', 'البيانات', 'شخصية',
   'الشخصية', 'حماية', 'الحماية', 'قانون', 'القانون', 'مادة', 'المادة',
@@ -569,6 +580,126 @@ function isValidIban(iban) {
 //   fakeValues — used by --mode fake
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Names (full_name, non_latin_name)
+// ---------------------------------------------------------------------------
+
+/**
+ * One Title Case word of a Latin name: `Sarah`, `Al-Kaabi`, `Jean-Luc`,
+ * `O'Brien`, `McDonald`, `MacLeod`.
+ */
+const TITLE_WORD = "(?:[A-Z]['’][A-Z][a-z]+|(?:Mc|Mac)?[A-Z][a-z]+(?:-[A-Z]?[a-z]+)*)";
+/** Lower-case connectors a Title Case name may contain: `bin`, `dela`, `van`. */
+const NAME_PARTICLE = '(?:bin|bint|ibn|al|el|de|del|dela|della|da|das|dos|du|van|von|der|den|le|la|di|y)';
+/**
+ * A greeting or title is not part of the name after it: `Dear Customer` is no
+ * name at all, and in `Dr Kumar` or `Dear Rajesh Kumar` only the name is
+ * masked (the salutation detector in name-spans.js finds a lone `Kumar`).
+ */
+const SALUTATION_WORD = '(?:Dear|Hi|Hello|Hey|Thanks|Thank|Cheers|Regards|Kind|Best|Welcome|Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Eng|Sheikh|Sheikha|Attn)';
+/**
+ * Two or more Title Case words, optionally joined by up to two particles:
+ * `Sarah Connor`, `Abdulla bin Rashid`, `Jose dela Cruz`, `Fatima Al-Kaabi`,
+ * `James O'Brien`.
+ */
+const FULL_NAME_RX = new RegExp(
+  `\\b(?!${SALUTATION_WORD}\\b)${TITLE_WORD}(?:[ \\t]+(?:${NAME_PARTICLE}[ \\t]+){0,2}${TITLE_WORD})+\\b`,
+  'g',
+);
+
+/** Prefixes that make a hyphenated word a name part: `Al-Kaabi`, `Bin-Zayed`. */
+const HYPHEN_NAME_PREFIX = new Set(['al', 'el', 'abu', 'abd', 'abdul', 'bin', 'ben', 'ibn', 'bint']);
+
+/** Title Case alone is 'low'; two listed names make it 'medium'; a cue 'high'. */
+function fullNameConfidence(match, text, idx) {
+  if (NAME_CUE_RX.test(text.slice(Math.max(0, idx - 24), idx))) return 'high';
+  const words = match.split(/\s+/).filter((w) => !/^[a-z]+$/.test(w));
+  return words.filter((w) => isKnownName(w) && !isAmbiguousName(w)).length >= 2 ? 'medium' : 'low';
+}
+
+function fullNameTitleCase(match, text, idx) {
+  const tokens = match.split(/\s+/);
+  // Title Case headings are full of hyphenated compounds (`Real-World
+  // Validation`, `Cross-Border Transfer`); a hyphenated name has an Arabic
+  // prefix (`Al-Kaabi`) or a listed name in it (`Jean-Luc`, `Smith-Jones`).
+  for (const t of tokens) {
+    if (!t.includes('-')) continue;
+    const parts = t.toLowerCase().split('-');
+    if (HYPHEN_NAME_PREFIX.has(parts[0])) continue;
+    if (!parts.some((p) => !COMMON_EN.has(p) && isKnownName(p) && !isAmbiguousName(p))) return false;
+  }
+  // A capitalised sentence opener glued to a name (`Today Mohammed`,
+  // `Please Sarah`) is not part of it: reject the run here, and the name
+  // detector (fullNameTrimmed) emits it without the opener.
+  if (leadingOpeners(tokens) > 0) return false;
+  return looksLikeName(tokens, COMMON_EN, text, idx);
+}
+
+/** Function words that may open a sentence before a name, even if listed as one. */
+const SENTENCE_OPENERS = new Set(['the', 'a', 'an', 'this', 'that', 'these', 'those', 'and', 'or', 'but', 'so',
+  'then', 'when', 'if', 'also', 'today', 'yesterday', 'tomorrow', 'please', 'ask', 'tell', 'call', 'email']);
+
+/**
+ * How many leading tokens are ordinary words that are not given names: `Today`
+ * in `Today Rajesh Kumar`. `Will` in `Will Smith` stays (a name).
+ */
+function leadingOpeners(tokens) {
+  let k = 0;
+  while (k < tokens.length - 1) {
+    const lw = tokens[k].toLowerCase();
+    if (SENTENCE_OPENERS.has(lw) || (COMMON_EN.has(lw) && !isGivenName(tokens[k]))) k++;
+    else break;
+  }
+  return k;
+}
+
+/**
+ * Title Case runs that start with an ordinary word, emitted without it when at
+ * least two words remain: `Today Rajesh Kumar` -> `Rajesh Kumar`. (A single
+ * remaining word is left to the repeat detector.)
+ */
+function fullNameTrimmed(text) {
+  const rx = new RegExp(FULL_NAME_RX.source, 'g');
+  const spans = [];
+  let m;
+  while ((m = rx.exec(text)) !== null) {
+    const tokens = m[0].split(/([ \t]+)/);
+    const words = tokens.filter((_, i) => i % 2 === 0);
+    const k = leadingOpeners(words);
+    if (k === 0) continue;
+    const rest = words.slice(k);
+    if (rest.length < 2 || /^[a-z]/.test(rest[0])) continue;
+    // The opener was the only evidence the run was a heading, so what is left
+    // must hold a listed name (`What Kakashi Catches` -> nothing).
+    if (!rest.some((w) => !COMMON_EN.has(w.toLowerCase()) && isKnownName(w) && !isAmbiguousName(w))) continue;
+    const offset = tokens.slice(0, k * 2).join('').length;
+    const start = m.index + offset;
+    const original = m[0].slice(offset);
+    if (!fullNameTitleCase(original, text, start)) continue;
+    spans.push({ start, end: start + original.length, original, confidence: fullNameConfidence(original, text, start) });
+  }
+  return spans;
+}
+
+const detectPersonFields = createPersonFieldDetector({
+  commonEn: COMMON_EN,
+  commonAr: COMMON_AR,
+  isOrgOrPlace,
+  // Phase 2: a value under a WEAK key (`name`) must contain a listed name, so a
+  // product catalogue's `name` column (`wireless mouse`, `USB CABLE`) is not a
+  // column of people.
+  hasNameEvidence: (words) => words.some((w) => isKnownName(w) && !isAmbiguousName(w)),
+});
+
+const nameSpans = createNameSpanDetectors({
+  commonEn: COMMON_EN,
+  commonAr: COMMON_AR,
+  isOrgOrPlace,
+  nameCueRx: NAME_CUE_RX,
+  titleCaseRx: FULL_NAME_RX,
+  titleCaseValidate: fullNameTitleCase,
+});
+
 const BASE_PATTERNS = [
   // ---- ID & Documents ------------------------------------------------------
   {
@@ -655,21 +786,15 @@ const BASE_PATTERNS = [
     label: 'Arabic Name',
     labelAr: 'اسم عربي',
     cat: 'id',
-    // Two or more whitespace-separated Arabic-script tokens.
-    // v1.2: extend to Cyrillic, Hebrew, CJK, Devanagari.
-    //
-    // Without the gate below, every run of two Arabic words was a "name", so
-    // ordinary Arabic prose -- including this tool's own report headings -- was
-    // masked. A nasab particle (بن, آل, عبد, أبو) is decisive evidence of a
-    // person and short-circuits the check.
-    rx: /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]+(?:[ \t]+[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]+)+/g,
-    validate: (match, text, idx) => {
-      const tokens = match.split(/\s+/);
-      // The particle shortcut must not rescue a place: أبو ظبي starts with أبو.
-      if (isOrgOrPlace(tokens)) return false;
-      if (tokens.some((w) => AR_NAME_PARTICLES.has(w))) return true;
-      return looksLikeName(tokens, COMMON_AR, text, idx);
-    },
+    // Arabic names in running text. It used to match any run of two or more
+    // Arabic words and reject only runs made entirely of stop-words, so
+    // ordinary sentences (`يرجى مراجعة التقرير المرفق قبل الاجتماع`) were
+    // "names". A span must now START at a listed given name, or at a head
+    // particle followed by a name (`عبد الله`, `أبو بكر`), and continues
+    // through listed names, nasab particles (`بن`, `بنت`, `آل`) and Gulf
+    // family names in the nisba form (`الكعبي`). A lone name counts after a
+    // title or greeting (`السيد راشد`). See name-spans.js and names.js.
+    detect: (text) => nameSpans.detectArabic(text),
     fakeValues: ['محمد أحمد', 'فاطمة علي'],
   },
   {
@@ -818,16 +943,26 @@ const BASE_PATTERNS = [
     label: 'Full Name',
     labelAr: 'الاسم الكامل',
     cat: 'pii',
-    rx: /\b[A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+)+\b/g,
+    // Title Case words, now also across particles, hyphens and apostrophes
+    // (`Abdulla bin Rashid`, `Fatima Al-Kaabi`, `James O'Brien`).
+    rx: FULL_NAME_RX,
     // Keep unless every token is an ordinary English word; an explicit name cue
     // before the match overrides that. See looksLikeName() for why the rule is
     // asymmetric.
-    validate: (match, text, idx) => looksLikeName(match.split(/\s+/), COMMON_EN, text, idx),
-    // Names found by the field they sit in rather than by their shape: a
-    // `full_name` column, a `"customer"` JSON key, a `Name:` line. Catches
-    // capitals, lower case, single names and Arabic values the regex cannot.
-    // See person-fields.js.
-    detect: createPersonFieldDetector({ commonEn: COMMON_EN, commonAr: COMMON_AR, isOrgOrPlace }),
+    validate: fullNameTitleCase,
+    // Title Case alone is weak evidence; a cue before it or listed names in it
+    // raise it.
+    confidence: fullNameConfidence,
+    // Names found by what surrounds or makes them rather than by their shape:
+    // the field they sit in (a `full_name` column, a `"customer"` key, a
+    // `Name:` line -- person-fields.js), and the name list for lower-case and
+    // ALL-CAPS names in text, a first name after `Thanks,` and repeats of a
+    // full name found elsewhere in the text (name-spans.js).
+    detect: (text) => {
+      const fields = detectPersonFields(text).map((s) => ({ ...s, confidence: 'high' }));
+      const trimmed = fullNameTrimmed(text);
+      return fields.concat(trimmed, nameSpans.detectLatin(text, fields.concat(trimmed)));
+    },
     fakeValues: ['John Smith', 'Jane Doe'],
   },
   // ---- Credentials ---------------------------------------------------------

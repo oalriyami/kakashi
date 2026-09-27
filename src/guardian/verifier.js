@@ -39,7 +39,7 @@ const Verifier = {
 
     // Re-read and re-scan. Full detector, no `enabled` filter -- we are asking
     // "what is in this file?", not "did my transform run?".
-    const { observation } = await observe(artifactPath, { kind: 'artifact' });
+    const { observation } = await observe(artifactPath, { kind: 'artifact', minConfidence: rules.minNameConfidence });
 
     const deniedRemaining = rules.denyOutright.filter((c) => observation.hasClass(c));
     const prohibitedRemaining = rules.prohibited.filter((c) => observation.hasClass(c));

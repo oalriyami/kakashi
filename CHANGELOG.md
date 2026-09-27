@@ -43,6 +43,48 @@ to 3.
   and 32–39-character hex keys after a key word (`api_key: 5d41…`). There are
   now 44 patterns, all classified `CREDENTIAL` and cited under PDPL Art. 20
   and 21.
+- **Name detection, phase 2: a local name list** (#12). On the name
+  benchmark, which now has 11 contexts and 43 person-free texts, recall is
+  176/176 and false alarms 0/43. Phase 1 gave 108/112 on its 7 contexts and
+  3/27 false alarms.
+  - [src/engine/names.js](src/engine/names.js) loads about 49,000 given and
+    69,000 family names from Wikidata (CC0), built by `npm run names:build`
+    into a 288 KB file. It also loads a regional supplement
+    ([src/engine/data/names-supplement.json](src/engine/data/names-supplement.json))
+    with Gulf, South Asian and Filipino names and Gulf family names.
+  - Words are compared after normalisation: case, accents, `Al-` / `ال`, and
+    the Arabic hamza, taa marbuta, alef maqsura, tatweel and diacritics.
+  - Names that are also everyday words are marked ambiguous (`will`, `hope`,
+    `price`; `أمل`, `نور`). The English ones are taken from subtitle word
+    frequencies: a name counts as ambiguous when the word is written in lower
+    case more often than not. Ambiguous names need other evidence.
+  - **Arabic prose is no longer a name.** `non_latin_name` used to match any
+    run of two Arabic words. A span must now start at a listed given name (or
+    `عبد` / `أبو` / `أم` and a name), and it continues through listed names,
+    `بن` / `بنت` / `آل`, and Gulf family names (`الكعبي`). On this
+    repository's own Arabic docs, findings drop from 169 to 7, all of them
+    names.
+  - **Title Case names** may contain particles, hyphens and apostrophes
+    (`Abdulla bin Rashid`, `Jose dela Cruz`, `Fatima Al-Kaabi`,
+    `James O'Brien`). They no longer swallow a greeting or title
+    (`Dear Customer` is not a name; in `Dr Kumar` only `Kumar` is masked) or a
+    sentence opener (`Today Rajesh Kumar` → `Rajesh Kumar`). Hyphenated
+    headings such as `Real-World Validation` are not names.
+  - **Names without Title Case or a cue:** lower-case and ALL-CAPS names in
+    text (`reassigned to priya nair`), a single name after a greeting or title
+    (`Thanks, Fatima`, `Kind regards,\nAnil`, `Dr Kumar`, `السيد راشد`), and a
+    first or last name that repeats a full name found elsewhere in the same
+    text.
+  - **Product catalogues:** a value under a weak key like `name` must contain
+    a listed name, so `wireless mouse` and `USB CABLE` rows are not people.
+  - **Confidence levels:** name findings carry `confidence`: `high` (a field
+    or cue), `medium` (the name list) or `low` (Title Case only).
+    `maskText({ minConfidence })` filters on it, and each Guardian destination
+    can set `minNameConfidence`, which observe, execute and verify all apply.
+    Every destination defaults to `low`, so today's behaviour is unchanged.
+  - Masking a 620 KB prose file takes about 0.3 s instead of 0.1 s, while
+    finding twice as many names in it. The list loads in about 50 ms, the
+    first time it is used.
 - **Phone numbers without separators** (#11). `phone` accepts E.164
   (`+447946095812`, `+966501234567`), the form databases and APIs store, and
   national numbers grouped 3-4-4 or 4-3-4 (`020 7946 0958`) after a phone label

@@ -696,8 +696,8 @@ Credit Card        4111 1111 1111 1111     →  [CC_1]               ← Luhn-ve
 SSN / National ID  123-45-6789             →  [SSN_1]
 Date of Birth      DOB: 15/03/1990         →  [DOB_1]
 Age                age: 34                 →  [AGE_1]
-Full Name          Alex Taylor             →  [FULL_NAME_1]
-Arabic Name        محمد أحمد               →  [NON_LATIN_NAME_1]
+Full Name          Alex Taylor             →  [FULL_NAME_1]        ← also by field, name list, greeting
+Arabic Name        محمد أحمد               →  [NON_LATIN_NAME_1]   ← must start at a listed given name
 ```
 
 Checksum-verified classes are a distinct risk signal to the Guardian: an identifier that *passes* its checksum is live, not a lookalike, and scores higher.

@@ -1,5 +1,6 @@
 const { PATTERNS } = require('./patterns');
 const { fakeValue } = require('./fakes');
+const { meetsConfidence } = require('./name-spans');
 
 function lineAtOffset(text, offset) {
   let line = 1;
@@ -39,6 +40,10 @@ function getReplacement(match, mode, valueMap, counters) {
  * @param {object} options
  * @param {object} [options.valueMap] - original->token map, shared across calls.
  * @param {object} [options.counters] - per-pattern token counters, shared across calls.
+ * @param {'low'|'medium'|'high'} [options.minConfidence] - drop findings whose
+ *   pattern reports a lower confidence (today: the name patterns -- Title Case
+ *   alone is 'low', the name list 'medium', a field or cue 'high'). Findings
+ *   without a confidence are always kept. Default: keep everything.
  *
  * `valueMap` and `counters` normally start empty, so a single call numbers its
  * tokens from 1 and gives the SAME original the SAME token throughout the text.
@@ -55,6 +60,7 @@ function maskText(text, options = {}) {
     patterns: patternOverride = null,
     valueMap = {},
     counters = {},
+    minConfidence = null,
   } = options;
 
   const whitelistSet = new Set(whitelist.map(String));
@@ -72,6 +78,7 @@ function maskText(text, options = {}) {
     if (typeof pattern.detect === 'function') {
       for (const span of pattern.detect(text)) {
         if (whitelistSet.has(span.original)) continue;
+        if (!meetsConfidence(span.confidence, minConfidence)) continue;
         matches.push({
           id: pattern.id,
           label: pattern.label,
@@ -80,6 +87,7 @@ function maskText(text, options = {}) {
           original: span.original,
           start: span.start,
           end: span.end,
+          confidence: span.confidence,
           fakeValues: pattern.fakeValues,
         });
       }
@@ -101,6 +109,8 @@ function maskText(text, options = {}) {
       // validate() always receives the WHOLE match. env_secret's stoplist needs
       // the key name, which sits outside the span it actually replaces.
       if (pattern.validate && !pattern.validate(full, text, m.index)) continue;
+      const confidence = pattern.confidence ? pattern.confidence(full, text, m.index) : undefined;
+      if (!meetsConfidence(confidence, minConfidence)) continue;
 
       let original = full;
       let start = m.index;
@@ -127,6 +137,7 @@ function maskText(text, options = {}) {
         original,
         start,
         end,
+        confidence,
         fakeValues: pattern.fakeValues,
       });
     }
@@ -171,6 +182,7 @@ function maskText(text, options = {}) {
       replacement,
       line,
       offset: match.start,
+      ...(match.confidence ? { confidence: match.confidence } : {}),
     });
     parts.push(text.slice(copied, match.start), replacement);
     copied = match.start + match.original.length;

@@ -131,7 +131,8 @@ async function runGuardian(opts = {}) {
       // the environment, and the environment can change under us between
       // iterations; a changed finding profile should be seen, not assumed away.
       state.record(STATUS.OBSERVING, 'observe_resource');
-      const { observation } = await observe(sourcePath, { kind: 'resource' });
+      const { minNameConfidence } = rulesFor(context.policy, context.destination.id);
+      const { observation } = await observe(sourcePath, { kind: 'resource', minConfidence: minNameConfidence });
       state.addObservation(observation);
       emit({ kind: 'observe', iteration, observation: observation.toJSON() });
 
@@ -220,7 +221,9 @@ async function runGuardian(opts = {}) {
       // releasable until the verifier has signed it off.
       state.record(STATUS.EXECUTING, 'execute_plan');
       const scratchArtifact = path.join(scratch, `iter${iteration}_${path.basename(artifactPath)}`);
-      const result = await Executor.execute({ authorized, sourcePath, artifactPath: scratchArtifact });
+      const result = await Executor.execute({
+        authorized, sourcePath, artifactPath: scratchArtifact, minConfidence: minNameConfidence,
+      });
       state.recordResult(result);
       emit({ kind: 'execute', iteration, replacements: result.replacementCount, byClass: result.byClass });
 

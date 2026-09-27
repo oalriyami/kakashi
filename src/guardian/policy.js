@@ -22,6 +22,12 @@
  *   requiresApproval[]  A human must sign off before release, even transformed.
  *   allowedTransforms   Caps which tools the planner may choose for a class.
  *                       Absent class => every transform tool is permitted.
+ *   minNameConfidence   Lowest confidence at which a name finding counts:
+ *                       'low' (default -- Title Case alone is enough),
+ *                       'medium' (the name list or a field must agree) or
+ *                       'high' (a field or cue only). Observe, execute and
+ *                       verify all use it, so a name below the threshold is
+ *                       neither transformed nor held against the artifact.
  */
 
 const { CLASSES } = require('./classes');
@@ -121,6 +127,7 @@ function rulesFor(policyId, destinationId) {
     restricted: dest.restricted || [],
     requiresApproval: dest.requiresApproval || [],
     allowedTransforms: dest.allowedTransforms || {},
+    minNameConfidence: dest.minNameConfidence || 'low',
   };
 }
 

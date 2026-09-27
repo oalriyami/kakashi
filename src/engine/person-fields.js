@@ -170,9 +170,11 @@ function classifyKey(key) {
  * @param {Set<string>} deps.commonEn - ordinary English words (lower case)
  * @param {Set<string>} deps.commonAr - ordinary Arabic words
  * @param {function(string[]):boolean} deps.isOrgOrPlace - veto for places and organisations
+ * @param {function(string[]):boolean} [deps.hasNameEvidence] - does any word
+ *   appear in the name list? Required of values under weak keys when given.
  * @returns {function(string): Array<{start:number,end:number,original:string}>}
  */
-function createPersonFieldDetector({ commonEn, commonAr, isOrgOrPlace }) {
+function createPersonFieldDetector({ commonEn, commonAr, isOrgOrPlace, hasNameEvidence = null }) {
   const isCommon = (w) => {
     const lw = w.toLowerCase().replace(/[.'’]/g, '');
     return commonEn.has(lw) || commonAr.has(w);
@@ -192,8 +194,9 @@ function createPersonFieldDetector({ commonEn, commonAr, isOrgOrPlace }) {
   /**
    * A value under a weak key must look like a person without help: two or
    * more words, none of them ordinary vocabulary, written in one consistent
-   * case. Names are `Ahmed Hassan`, `AHMED HASSAN` or `ahmed hassan`; a
-   * workflow step is `Set up Node`.
+   * case, and -- with the name list -- at least one of them a listed name.
+   * Names are `Ahmed Hassan`, `AHMED HASSAN` or `ahmed hassan`; a workflow
+   * step is `Set up Node`; a product is `Wireless Mouse`.
    */
   function passesWeak(value) {
     const words = nameWords(value.replace(',', ''));
@@ -202,7 +205,8 @@ function createPersonFieldDetector({ commonEn, commonAr, isOrgOrPlace }) {
     if (content.length < 2) return false;
     if (!content.every((w) => !isCommon(w) && w.replace(/[.'’-]/g, '').length >= 2)) return false;
     const cases = new Set(content.map(caseOf).filter(Boolean));
-    return cases.size <= 1 && !cases.has('mixed');
+    if (cases.size > 1 || cases.has('mixed')) return false;
+    return !hasNameEvidence || hasNameEvidence(content);
   }
 
   return function detectPersonFields(text) {

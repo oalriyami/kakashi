@@ -22,11 +22,13 @@ flowchart TB
   subgraph L2 [Layer 2 - Core Engine]
     Patterns["patterns.js<br/>(44 detection patterns)"]
     Fields["person-fields.js<br/>(names by key / column)"]
+    Names["names.js + name-spans.js<br/>(name list, Arabic spans)"]
     Masker["masker.js<br/>(tokenise + reconstruct)"]
     Fakes["fakes.js<br/>(distinct fake values)"]
     Formats["formats/<br/>(text, xlsx, docx, pptx, pdf)"]
     DB["engine/db/<br/>(6 driver adapters)"]
     Fields --> Patterns
+    Names --> Patterns
     Patterns --> Masker
     Fakes --> Masker
     Masker --> Formats
@@ -154,6 +156,8 @@ sequenceDiagram
 | --- | --- | --- |
 | [src/engine/patterns.js](../src/engine/patterns.js) | 44 detection patterns, each a regex with an optional `validate()` and/or a `detect(text)` hook for structural detection; checksum helpers (Luhn, Emirates ID, IBAN mod-97 plus per-country length) | `PATTERNS`, `luhnCheck`, `isValidEmiratesId`, `isValidIban`, `isOrgOrPlace` |
 | [src/engine/person-fields.js](../src/engine/person-fields.js) | Names found by the key, label or column header they sit under, in any case or script (the `full_name` pattern's `detect` hook) | `createPersonFieldDetector`, `classifyKey` |
+| [src/engine/names.js](../src/engine/names.js) | The local name list: about 49,000 given and 69,000 family names from Wikidata (CC0) plus a regional supplement, in [src/engine/data/](../src/engine/data/); normalisation for Latin and Arabic; names that are also everyday words | `isGivenName`, `isFamilyName`, `isAmbiguousName`, `nameKey` |
+| [src/engine/name-spans.js](../src/engine/name-spans.js) | Name spans from the list: Arabic runs segmented at a listed given name (`non_latin_name`), lower-case and ALL-CAPS names in text, a name after a greeting or title, repeats of a full name; a confidence per span (`high` field or cue, `medium` list, `low` Title Case only) that `maskText({ minConfidence })` and each Guardian destination's `minNameConfidence` can filter on | `createNameSpanDetectors`, `meetsConfidence` |
 | [src/engine/masker.js](../src/engine/masker.js) | Tokenise + reconstruct, in one linear pass | `maskText(text, opts)` |
 | [src/engine/fakes.js](../src/engine/fakes.js) | `--mode fake` values: distinct per original, deterministic, never-live where the format allows | `fakeValue(id, n, fakeValues)` |
 | [src/engine/formats/](../src/engine/formats/) | Per-format read/write. Spreadsheets are read one row per line so headers label columns; writers replace name-like values as whole words (`replace.js`) | `readFile`, `writeMasked` |
@@ -382,7 +386,7 @@ GitHub Actions example:
 | 1.2.0 | 2026-09-18 | The Guardian: autonomous release decisions (observe → assess → plan → policy → act → verify → replan), task understanding, value-free audit log |
 | 1.3.0 | 2026-09-23 | `/kakashi` orchestrator picks the tool from intent; 14 commands; agent-guard degrades to polling on Windows |
 | 1.3.1 | 2026-09-23 | `/kakashi` works in agents without native slash commands |
-| **Unreleased** | | **Names by field and column; quoted-key secrets; Luhn, Emirates ID and all-country IBAN checks; linear-time masking; distinct fakes and consistent tokens across files; recursive agent-guard watching on Linux; 8 more credential formats and E.164 phone numbers. See [CHANGELOG.md](../CHANGELOG.md).** |
+| **Unreleased** | | **Names by field and column; quoted-key secrets; Luhn, Emirates ID and all-country IBAN checks; linear-time masking; distinct fakes and consistent tokens across files; recursive agent-guard watching on Linux; 8 more credential formats and E.164 phone numbers; a local name list for Arabic prose, greetings and repeated names, with confidence levels; a lighter repository. See [CHANGELOG.md](../CHANGELOG.md).** |
 
 ---
 
