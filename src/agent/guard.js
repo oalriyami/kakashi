@@ -24,9 +24,26 @@
  *        POST /scan { path }    → { findings, summary }  (counts + PDPL)
  *        POST /mask { path }    → { output, findings }   (writes masked_)
  *
- *      Any MCP-enabled agent (Claude, Cursor, Copilot, ...) can be wired
- *      to POST /scan before attaching a file body to its LLM context, and
- *      refuse the attach if findings > 0.
+ *      Any local agent can be wired to POST /scan before attaching a file
+ *      body to its LLM context, and refuse the attach if findings > 0.
+ *
+ *      Loopback is not a trust boundary on its own: every web page the user
+ *      opens can send requests to 127.0.0.1, and so can every other process
+ *      and user on the machine. /scan and /mask read and write files, so they
+ *      require, in order (#32):
+ *
+ *        - a Host header naming the loopback address or `localhost`, which
+ *          defeats DNS rebinding (a rebound page sends its own host name);
+ *        - no Origin header: browsers send one on every POST, local tools
+ *          do not, so no web page can reach them;
+ *        - `Content-Type: application/json`, which a page cannot send
+ *          cross-origin without a CORS preflight this server never answers;
+ *        - `Authorization: Bearer <token>`, a random token minted at start
+ *          and written to a file only the user can read, which keeps out
+ *          other users and processes on the machine;
+ *        - a `path` inside the watched folder, after resolving symlinks, and
+ *          an output that is a new file (or an earlier masked_ copy) inside
+ *          it too, never a symlink.
  *
  *   3. Never opens outbound sockets. All state is in-memory + one local
  *      JSONL file. This preserves the "nothing leaves your machine"
@@ -34,8 +51,10 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const { maskText } = require('../engine/masker');
 const formats = require('../engine/formats');
 const { summarize } = require('../lib/pdpl-mapping');
@@ -78,6 +97,131 @@ const DEFAULTS = {
   bindAddress: LOOPBACK,
   scanCooldownMs: 500, // debounce: don't re-scan a file more than 2×/sec
 };
+
+/** A request the daemon refuses, with the HTTP status to refuse it with. */
+class Refusal extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** Where the token for a daemon on `port` is written unless told otherwise. */
+function defaultTokenFile(port) {
+  return path.join(os.homedir(), '.kakashi', `agent-guard-${port}.token`);
+}
+
+/**
+ * The per-launch token. `KAKASHI_GUARD_TOKEN` lets a script that starts the
+ * daemon choose it (at least 32 characters); otherwise it is random.
+ */
+function makeToken() {
+  const fromEnv = process.env.KAKASHI_GUARD_TOKEN;
+  if (fromEnv !== undefined) {
+    if (fromEnv.length < 32) throw new Error('agent-guard: KAKASHI_GUARD_TOKEN must be at least 32 characters');
+    return fromEnv;
+  }
+  return crypto.randomBytes(32).toString('hex');
+}
+
+/** Write the token so only this user can read it. */
+function writeToken(file, token) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  // Refuse to follow a symlink planted where the token goes.
+  try {
+    if (fs.lstatSync(file).isSymbolicLink()) throw new Error(`agent-guard: refusing to write the token through a symlink: ${file}`);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  fs.writeFileSync(file, `${token}\n`, { mode: 0o600 });
+  fs.chmodSync(file, 0o600);
+}
+
+/** Constant-time comparison of the presented token with the real one. */
+function tokenMatches(header, token) {
+  const m = /^Bearer\s+(\S+)$/i.exec(header || '');
+  if (!m) return false;
+  const given = Buffer.from(m[1]);
+  const want = Buffer.from(token);
+  return given.length === want.length && crypto.timingSafeEqual(given, want);
+}
+
+/** Is `candidate` the root itself or somewhere beneath it? */
+function isInside(root, candidate) {
+  return candidate === root || candidate.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+}
+
+/**
+ * Resolve a requested input path against the watched folder. Relative paths
+ * are relative to the folder, and the file must really live inside it once
+ * symlinks are resolved.
+ */
+function confineInput(root, requested) {
+  if (typeof requested !== 'string' || requested.length === 0) {
+    throw new Refusal(400, '"path" must be a non-empty string');
+  }
+  const abs = path.resolve(root, requested);
+  let real;
+  try {
+    real = fs.realpathSync(abs);
+  } catch {
+    // Missing files are reported by scanFile as { skipped, reason: not_found },
+    // but only once we know the path would have been inside the folder.
+    if (!isInside(root, abs)) throw new Refusal(403, 'path is outside the watched folder');
+    return abs;
+  }
+  if (!isInside(root, real)) throw new Refusal(403, 'path is outside the watched folder');
+  return real;
+}
+
+/**
+ * Decide where a masked copy may be written.
+ *
+ * With no `output`, the copy goes next to the input as masked_<name>, and an
+ * earlier copy of that name may be replaced. An explicit `output` must be a
+ * NEW file. Either way it must sit inside the watched folder, must not be a
+ * symlink, and must not be the input itself.
+ */
+function confineOutput(root, input, requested) {
+  let target;
+  let explicit = false;
+  if (requested === undefined || requested === null) {
+    target = formats.defaultOutputPath(input);
+  } else {
+    if (typeof requested !== 'string' || requested.length === 0) {
+      throw new Refusal(400, '"output" must be a non-empty string');
+    }
+    target = path.resolve(root, requested);
+    explicit = true;
+  }
+  let parent;
+  try {
+    parent = fs.realpathSync(path.dirname(target));
+  } catch {
+    throw new Refusal(400, 'the output folder does not exist');
+  }
+  const real = path.join(parent, path.basename(target));
+  if (!isInside(root, real)) throw new Refusal(403, 'output is outside the watched folder');
+  if (real === input) throw new Refusal(400, 'output would overwrite the input');
+  let st = null;
+  try {
+    st = fs.lstatSync(real);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  if (st) {
+    if (st.isSymbolicLink() || !st.isFile()) throw new Refusal(403, 'output exists and is not a regular file');
+    if (explicit) throw new Refusal(409, 'output already exists; choose a new file name');
+  }
+  return real;
+}
+
+/** Is this Host header one of our own loopback names? */
+function isLoopbackHost(host, port) {
+  if (!host) return false;
+  const names = ['127.0.0.1', 'localhost', '[::1]'];
+  return names.some((n) => host === n || host === `${n}:${port}`);
+}
 
 /**
  * Scan a single file and return an enriched summary.
@@ -139,6 +283,11 @@ async function start(options) {
   if (!fs.existsSync(watch) || !fs.statSync(watch).isDirectory()) {
     throw new Error(`agent-guard: not a directory: ${watch}`);
   }
+
+  // Everything the API touches is checked against the folder's real path.
+  const root = fs.realpathSync(watch);
+  const token = makeToken();
+  let tokenFile = null;
 
   const state = {
     startedAt: Date.now(),
@@ -212,7 +361,7 @@ async function start(options) {
         bySeverity: result.summary.bySeverity,
       });
       if (autoMask && result.summary.total > 0) {
-        const masked = await maskFile(full);
+        const masked = await maskFile(full, confineOutput(root, fs.realpathSync(full)));
         emit({ kind: 'auto_masked', path: relative, output: masked.output, findings: masked.findings.length });
       }
     } catch (err) {
@@ -353,20 +502,31 @@ async function start(options) {
   }
 
   // ---- HTTP API (loopback only) --------------------------------------------
+  function send(res, status, body) {
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(body));
+  }
+
   const server = http.createServer(async (req, res) => {
-    // Refuse anything that isn't loopback. Belt-and-braces on top of
-    // The server still guards the peer address in case an upstream
-    // reverse proxies mistakenly forwarding to us.
+    // Refuse anything that isn't loopback. Belt-and-braces on top of the bind
+    // address, in case a reverse proxy mistakenly forwards to us.
     const remote = req.socket.remoteAddress || '';
     if (!/^(127\.|::1|::ffff:127\.)/.test(remote)) {
-      res.writeHead(403, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'agent-guard binds loopback only' }));
+      send(res, 403, { error: 'agent-guard binds loopback only' });
+      return;
+    }
+    const boundPort = server.address() && server.address().port;
+    if (!isLoopbackHost(req.headers.host, boundPort)) {
+      send(res, 403, { error: 'Host must be 127.0.0.1, localhost or [::1]' });
+      return;
+    }
+    if (req.headers.origin !== undefined) {
+      send(res, 403, { error: 'requests from web pages are not accepted' });
       return;
     }
 
     if (req.method === 'GET' && req.url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
+      send(res, 200, {
         ok: true,
         watching: watch,
         uptimeMs: Date.now() - state.startedAt,
@@ -381,56 +541,67 @@ async function start(options) {
         // covers subdirectories; watchRecursive says so explicitly.
         watchStrategy,
         watchRecursive: watchMode !== 'off',
+        // Where a client finds the token /scan and /mask require.
+        tokenFile,
         version,
-      }));
+      });
       return;
     }
 
     if (req.method === 'POST' && (req.url === '/scan' || req.url === '/mask')) {
+      const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+      if (type !== 'application/json') {
+        send(res, 415, { error: 'Content-Type must be application/json' });
+        return;
+      }
+      if (!tokenMatches(req.headers.authorization, token)) {
+        send(res, 401, { error: 'Authorization: Bearer <token> required; the token is in the file /health names' });
+        return;
+      }
       const body = await readBody(req);
       let parsed;
       try {
         parsed = JSON.parse(body || '{}');
       } catch {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Body must be JSON: {"path":"..."}' }));
+        send(res, 400, { error: 'Body must be JSON: {"path":"..."}' });
         return;
       }
-      if (!parsed.path) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Missing "path" field' }));
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        send(res, 400, { error: 'Body must be a JSON object: {"path":"..."}' });
+        return;
+      }
+      if (parsed.path === undefined) {
+        send(res, 400, { error: 'Missing "path" field' });
         return;
       }
       try {
+        const input = confineInput(root, parsed.path);
         if (req.url === '/scan') {
-          const result = await scanFile(parsed.path);
+          const result = await scanFile(input);
           state.files++;
           if (result.summary) state.findings += result.summary.total;
-          emit({ kind: 'api_scan', path: parsed.path, findings: result.summary?.total || 0 });
+          emit({ kind: 'api_scan', path: path.relative(root, input), findings: result.summary?.total || 0 });
           // Return COUNTS + PDPL summary — never the raw finding values,
-          // even over loopback. Agents that need the full mapping must call
-          // /audit (not implemented here — you'd want a permission gate for
-          // that in a v1.2 release).
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(result.skipped ? result : {
-            path: result.path,
-            summary: result.summary,
-          }));
+          // even over loopback.
+          send(res, 200, result.skipped ? result : { path: result.path, summary: result.summary });
         } else {
-          const result = await maskFile(parsed.path, parsed.output);
-          emit({ kind: 'api_mask', path: parsed.path, findings: result.findings.length });
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ output: result.output, replacements: result.findings.length }));
+          const output = confineOutput(root, input, parsed.output);
+          const result = await maskFile(input, output);
+          emit({ kind: 'api_mask', path: path.relative(root, input), findings: result.findings.length });
+          send(res, 200, { output: result.output, replacements: result.findings.length });
         }
       } catch (err) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: err.message }));
+        if (err instanceof Refusal) {
+          emit({ kind: 'api_refused', status: err.status, reason: err.message });
+          send(res, err.status, { error: err.message });
+        } else {
+          send(res, 500, { error: err.message });
+        }
       }
       return;
     }
 
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Not found. Try GET /health, POST /scan, POST /mask.' }));
+    send(res, 404, { error: 'Not found. Try GET /health, POST /scan, POST /mask.' });
   });
 
   await new Promise((resolve, reject) => {
@@ -438,20 +609,36 @@ async function start(options) {
     server.listen(port, bindAddress, resolve);
   });
 
+  // Port 0 asks the OS for any free ephemeral port. Return the actual bound
+  // port so a local client never mistakes 0 for a usable endpoint.
+  const address = server.address();
+  const boundPort = typeof address === 'object' && address ? address.port : port;
+
+  // The token file is named after the bound port, so two daemons never share
+  // one. It is written only after the port is known and removed on stop.
+  try {
+    tokenFile = options.tokenFile || defaultTokenFile(boundPort);
+    writeToken(tokenFile, token);
+  } catch (err) {
+    server.close();
+    try { watcher.close(); } catch { /* already closed */ }
+    if (poller) clearInterval(poller);
+    throw err;
+  }
+
   function stop() {
     // Best-effort teardown: any of these may already have been closed by an
     // earlier error path, so guard each with try/catch. The point of stop() is
     // to leave nothing running, not to prove nothing was running.
     try { watcher.close(); } catch { /* already closed */ }
     if (poller) { try { clearInterval(poller); } catch { /* already cleared */ } }
+    try {
+      if (fs.readFileSync(tokenFile, 'utf8').trim() === token) fs.rmSync(tokenFile, { force: true });
+    } catch { /* already gone */ }
     return new Promise((resolve) => server.close(() => resolve()));
   }
 
-  // Port 0 asks the OS for any free ephemeral port. Return the actual bound
-  // port so a local client never mistakes 0 for a usable endpoint.
-  const address = server.address();
-  const boundPort = typeof address === 'object' && address ? address.port : port;
-  return { server, watcher, stop, port: boundPort, state };
+  return { server, watcher, stop, port: boundPort, state, token, tokenFile };
 }
 
 function readBody(req) {
@@ -463,4 +650,4 @@ function readBody(req) {
   });
 }
 
-module.exports = { start, scanFile, maskFile, DEFAULTS };
+module.exports = { start, scanFile, maskFile, DEFAULTS, defaultTokenFile };

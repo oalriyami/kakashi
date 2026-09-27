@@ -354,13 +354,22 @@ Replacement tokens like `[NATIONAL_ID_1]` contain no bidirectional-embedding cha
 
 | Verb + Path | Body | Response |
 | --- | --- | --- |
-| `GET /health` | — | `{ ok, watching, uptimeMs, filesScanned, totalFindings, version }` |
+| `GET /health` | — | `{ ok, watching, uptimeMs, filesScanned, totalFindings, tokenFile, version }` |
 | `POST /scan` | `{ "path": "..." }` | `{ path, summary }` — PDPL-enriched summary; no raw values |
 | `POST /mask` | `{ "path": "...", "output": "..." }` | `{ output, replacements }` |
 
 ### 9.3 Loopback enforcement
 
-Belt-and-braces. Even though the daemon binds to `127.0.0.1`, every incoming request is additionally checked against `req.socket.remoteAddress` and rejected with 403 unless the origin matches a loopback prefix (`127.`, `::1`, `::ffff:127.`).
+Loopback alone is not a trust boundary: any web page the user opens can send requests to `127.0.0.1`, and so can every other process and user on the machine. Each request is checked in this order:
+
+| Check | Refused with | Stops |
+| --- | --- | --- |
+| Peer address is loopback (`127.`, `::1`, `::ffff:127.`) | 403 | a reverse proxy forwarding remote traffic |
+| `Host` is `127.0.0.1`, `localhost` or `[::1]` (with the port) | 403 | DNS rebinding |
+| No `Origin` header | 403 | any web page (browsers always send one on POST) |
+| `Content-Type: application/json` (POST) | 415 | cross-origin "simple" requests |
+| `Authorization: Bearer <token>` (POST) | 401 | other users and processes; the token is random per launch, in `~/.kakashi/agent-guard-<port>.token`, mode 0600 |
+| `path` inside the watched folder after resolving symlinks; `output` a new, non-symlink file inside it (the default `masked_<name>` may be refreshed) | 403 / 409 | reading or overwriting files elsewhere |
 
 > **Zero-network-call preservation.** agent-guard never opens an outbound socket. All state is in-memory plus one local JSONL log. Kakashi's "nothing leaves your machine" guarantee holds even while running as a long-lived daemon.
 

@@ -114,6 +114,39 @@ to 3.
 
 ### Fixed
 
+- **The agent-guard API only serves local tools, inside the watched folder**
+  (#32). Loopback is not a trust boundary: every web page the user opens can
+  send requests to `127.0.0.1`, and so can every other process on the
+  machine. `/mask` wrote a masked copy to any `output` path -- a cross-origin
+  `text/plain` POST from a web page could overwrite a file outside the
+  watched folder -- and `/scan` read any path. `/scan` and `/mask` now
+  require, in order: a `Host` of `127.0.0.1`, `localhost` or `[::1]` (defeats
+  DNS rebinding); no `Origin` header (no web page); `Content-Type:
+  application/json` (no preflight-free cross-origin request); and
+  `Authorization: Bearer <token>`, with a random token minted at start and
+  written to `~/.kakashi/agent-guard-<port>.token` (mode 0600, removed on
+  stop; `--token-file` to move it, `KAKASHI_GUARD_TOKEN` to set it). `path`
+  resolves against the watched folder and must stay inside it after
+  symlinks; an explicit `output` must be a new file there, the default
+  `masked_<name>` may be refreshed, and neither may be a symlink or the
+  input. `--auto-mask` follows the same output rule. A non-object or
+  non-string body is a 400 instead of a crash. `/health` names the token
+  file. **Clients must now send the token** (see
+  [commands/kakashi-agent-guard.md](commands/kakashi-agent-guard.md)).
+- **PDFs are read in full** (#31). Text items on a line are now separated by
+  the gap between them (nothing, a space, or a tab for a column), so a table
+  row no longer reads as `1Rajesh Kumar0501234567411111…` and its IDs, phones
+  and cards are detected; items drawn over each other start a new line. Form
+  field values, note text and authors, alternative text and the document's
+  title, author, subject and keywords are read too. A page that paints an
+  image but carries almost no text is reported as not checked: `scan` and
+  `mask` say so, the masked extract's header names the page, and Guardian
+  returns `REQUIRE_APPROVAL` (`UNSCANNED_CONTENT`) before an external
+  release. PDFs under about 4 KB no longer fail with "bad XRef entry". The
+  extract's header states how many values were replaced (or that none were)
+  instead of always claiming values were replaced. pdf.js no longer prints
+  warnings into `--json` output, and reading a PDF with embedded fonts no
+  longer risks a crash from pdf.js trying to load them into a browser DOM.
 - **Office files are read and masked in full** (#27). A `.docx`, `.pptx` or
   `.xlsx` was read only for its body text, so everything else was missing from
   both the scan and the masked copy, and Guardian released the unchanged

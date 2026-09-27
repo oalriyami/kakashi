@@ -47,13 +47,16 @@ function finishWith(code) {
 
 /**
  * Say so when part of a file could not be read (an embedded OLE object, an
- * ActiveX control, a macro project). A finding count covers only what was
- * read, so "0 findings" must not be taken as "clean" here.
+ * ActiveX control, a macro project, a scanned PDF page). A finding count
+ * covers only what was read, so "0 findings" must not be taken as "clean".
+ * The parts are named by position (`page 3`, `word/embeddings/oleObject1.bin`),
+ * never by content.
  */
 function warnUnscanned(data) {
-  const n = (data && data.unscanned ? data.unscanned.length : 0);
-  if (n === 0) return;
-  console.log(chalk.yellow(`   ${n} embedded object(s) could not be read and were not checked.`));
+  const parts = (data && data.unscanned) || [];
+  if (parts.length === 0) return;
+  const shown = parts.slice(0, 5).join(', ') + (parts.length > 5 ? `, and ${parts.length - 5} more` : '');
+  console.log(chalk.yellow(`   ${parts.length} part(s) could not be read and were not checked: ${shown}`));
 }
 
 async function processFile(filePath, options, action) {
@@ -597,6 +600,7 @@ program
   .option('--host <h>', 'Bind host (must be loopback)', LOOPBACK)
   .option('--log <path>', 'Append JSONL audit events to this file')
   .option('--auto-mask', 'Automatically write masked_<file> when scan finds anything')
+  .option('--token-file <path>', 'Where to write the API token (default: ~/.kakashi/agent-guard-<port>.token)')
   .action(async (options) => {
     const guard = require('../src/agent/guard');
     let handle;
@@ -606,6 +610,7 @@ program
         port: parseInt(options.port, 10),
         log: options.log,
         autoMask: options.autoMask,
+        tokenFile: options.tokenFile,
         onEvent: (e) => {
           if (e.kind === 'passive_scan' && e.findings > 0) {
             console.log(chalk.yellow(`[guard] ${e.path} — ${e.findings} finding(s)`));
@@ -615,6 +620,8 @@ program
             console.log(chalk.gray(`[api] /scan ${e.path} → ${e.findings} finding(s)`));
           } else if (e.kind === 'api_mask') {
             console.log(chalk.gray(`[api] /mask ${e.path} → ${e.findings} replacement(s)`));
+          } else if (e.kind === 'api_refused') {
+            console.log(chalk.yellow(`[api] refused (${e.status}): ${e.reason}`));
           }
         },
       };
@@ -628,6 +635,7 @@ program
     console.log(chalk.cyan(`\n${BRAND} — agent-guard`));
     console.log(chalk.gray(`   watching: ${options.watch}`));
     console.log(chalk.gray(`   http:     http://${options.host}:${handle.port}/health`));
+    console.log(chalk.gray(`   token:    ${handle.tokenFile}  (send as Authorization: Bearer <token>)`));
     if (options.log) console.log(chalk.gray(`   log:      ${options.log}`));
     console.log(chalk.gray('   Ctrl-C to stop\n'));
 

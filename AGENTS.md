@@ -220,7 +220,10 @@ kakashi agent-guard --watch ./workspace --port 8797 --auto-mask
 ```
 
 Binds to loopback (`127.0.0.1`) only, exposes `/health`, `/scan`, and
-`/mask` for local tools. Zero outbound network calls. `/health` reports
+`/mask` for local tools. `/scan` and `/mask` take JSON with
+`Authorization: Bearer <token>`; the token is in the file `/health` names
+(`~/.kakashi/agent-guard-<port>.token`). Paths must be inside the watched
+folder. Zero outbound network calls. `/health` reports
 `watchMode: watch | poll | off` so callers know whether the watcher
 survived startup or degraded to polling (Windows mapped drives / WSL
 mounts trigger the poll fallback automatically).

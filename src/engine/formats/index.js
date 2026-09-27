@@ -90,7 +90,10 @@ async function writeMasked(filePath, outputPath, data, replMap, maskedText) {
       await pptxHandler.writePptx(filePath, outputPath, data, replMap);
       return outputPath;
     case 'pdf':
-      pdfHandler.writePdf(filePath, outputPath, maskedText);
+      pdfHandler.writePdf(filePath, outputPath, maskedText, {
+        replaced: Object.keys(replMap || {}).length,
+        unscanned: data.unscanned || [],
+      });
       // The extract is written after a short header.
       verifyRoundTrip(outputPath, maskedText, { encoding: 'utf-8', bom: false }, { endsWith: true });
       return outputPath;

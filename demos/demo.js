@@ -292,7 +292,7 @@ function demoGuardian(fixtures) {
   pass('Guardian audit event records reasoning and counts without raw values');
 }
 
-function requestJson({ port, method = 'GET', route, body }) {
+function requestJson({ port, method = 'GET', route, body, token }) {
   return new Promise((resolve, reject) => {
     const payload = body ? JSON.stringify(body) : '';
     const req = http.request({
@@ -303,6 +303,8 @@ function requestJson({ port, method = 'GET', route, body }) {
       headers: body ? {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
+        // /scan and /mask need the token the daemon wrote at start.
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       } : {},
     }, (res) => {
       const chunks = [];
@@ -356,12 +358,14 @@ async function demoSidecar(fixtures) {
     'Start the loopback-only service and exercise health, agent-safe scan, and mask APIs.');
 
   const logPath = path.join(OUTPUT, 'sidecar-audit.jsonl');
+  const tokenPath = path.join(OUTPUT, 'sidecar.token');
   const child = spawn(process.execPath, [
-    CLI, 'agent-guard', '--watch', INPUT, '--port', '0', '--log', logPath,
+    CLI, 'agent-guard', '--watch', INPUT, '--port', '0', '--log', logPath, '--token-file', tokenPath,
   ], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
 
   try {
     const port = await waitForPort(child);
+    const token = fs.readFileSync(tokenPath, 'utf8').trim();
     const health = await requestJson({ port, route: '/health' });
     assert.strictEqual(health.status, 200);
     assert.strictEqual(JSON.parse(health.text).ok, true);
@@ -372,22 +376,38 @@ async function demoSidecar(fixtures) {
       method: 'POST',
       route: '/scan',
       body: { path: fixtures.citizenFile },
+      token,
     });
     assert.strictEqual(scan.status, 200);
     assert(JSON.parse(scan.text).summary.total > 0);
     assertNoRaw(scan.text, 'sidecar /scan response');
     pass('/scan returned categories and counts without matched values');
 
-    const output = path.join(OUTPUT, 'sidecar-masked.md');
+    // The API writes only inside the folder it watches: the masked copy lands
+    // next to the input as masked_<name>, and is copied to the output folder.
     const mask = await requestJson({
       port,
       method: 'POST',
       route: '/mask',
-      body: { path: fixtures.citizenFile, output },
+      body: { path: fixtures.citizenFile },
+      token,
     });
     assert.strictEqual(mask.status, 200);
-    assertFileSafe(output);
+    const written = JSON.parse(mask.text).output;
+    assertFileSafe(written);
+    const output = path.join(OUTPUT, 'sidecar-masked.md');
+    fs.copyFileSync(written, output);
     pass('/mask wrote a safe artifact through the local API');
+
+    const refused = await requestJson({
+      port,
+      method: 'POST',
+      route: '/mask',
+      body: { path: fixtures.citizenFile, output: path.join(OUTPUT, 'escape.md') },
+      token,
+    });
+    assert.strictEqual(refused.status, 403);
+    pass('/mask refused to write outside the watched folder');
   } finally {
     await stopChild(child);
   }

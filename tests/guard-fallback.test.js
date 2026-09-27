@@ -78,6 +78,8 @@ async function runGuardFallbackTests() {
       handle = await guardMod.start({
         watch: tmpDir,
         port,
+        // Keep the API token out of the developer's home directory.
+        tokenFile: path.join(os.tmpdir(), `kakashi-fallback-${process.pid}-${port}.token`),
         onEvent: (e) => events.push(e),
       });
       // The daemon MUST have recorded a watch_failed event (proof it noticed).
@@ -113,6 +115,8 @@ async function runGuardFallbackTests() {
       handle = await guardMod.start({
         watch: tmpDir,
         port,
+        // Keep the API token out of the developer's home directory.
+        tokenFile: path.join(os.tmpdir(), `kakashi-fallback-${process.pid}-${port}.token`),
         onEvent: (e) => events.push(e),
       });
       assert(events.some((e) => e.kind === 'watch_disabled'),
@@ -139,7 +143,7 @@ async function runGuardFallbackTests() {
     let handle;
     try {
       const guardMod = require(guardModulePath);
-      handle = await guardMod.start({ watch: tmpDir, port });
+      handle = await guardMod.start({ watch: tmpDir, port, tokenFile: path.join(os.tmpdir(), `kakashi-fallback-${process.pid}-${port}.token`) });
       const r = await get(port, '/health');
       const body = JSON.parse(r.body);
       assert.strictEqual(body.version, pkg.version,

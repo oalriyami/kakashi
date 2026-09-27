@@ -9,9 +9,18 @@ Start (or reason about) the Kakashi agent-guard sidecar for `$ARGUMENTS`.
 A local HTTP daemon on `127.0.0.1` (loopback only — never a public
 interface) with three endpoints an IDE / MCP client can call synchronously:
 
-- `GET  /health` — liveness + counters + which watch mode is active
+- `GET  /health` — liveness + counters + which watch mode is active, and
+  `tokenFile`, where the API token is
 - `POST /scan  { "path": "..." }` — PDPL-enriched summary; no raw values
-- `POST /mask  { "path": "...", "output": "..." }` — writes masked_ file
+- `POST /mask  { "path": "..." }` — writes `masked_<name>` next to the file
+  (an optional `"output"` must be a new file inside the watched folder)
+
+`/scan` and `/mask` need `Content-Type: application/json` and
+`Authorization: Bearer <token>`. The token is minted at start and written to
+`~/.kakashi/agent-guard-<port>.token`, readable by the user only. Paths are
+relative to the watched folder, and anything outside it — including through a
+symlink — is refused with 403. Requests carrying an `Origin` header (web
+pages) or a Host other than `127.0.0.1` / `localhost` are refused too.
 
 Plus a passive filesystem watcher that scans anything that changes under the
 watched directory and appends a JSONL audit line — useful as a canary a DPO
@@ -28,7 +37,8 @@ can review later.
    ```
    Fall back via `npx -y @muhammadatef/kakashi agent-guard ...`.
 4. Explain the loopback contract: 127.0.0.1 only, remote-address hard-check
-   inside the server, zero outbound sockets. The daemon does not phone home.
+   inside the server, a per-launch token, paths confined to the watched
+   folder, zero outbound sockets. The daemon does not phone home.
 5. On Windows, `fs.watch` sometimes fails with `UNKNOWN` on network drives
    (G:), sandboxed paths, or WSL mounts. Kakashi degrades to polling in that
    case — the `/health` endpoint returns `"watchMode":"poll"` so the caller
@@ -47,7 +57,16 @@ or PowerShell:
 Invoke-WebRequest http://127.0.0.1:8797/health -UseBasicParsing
 ```
 
-Expect `{"ok":true, "watching":"<dir>", "watchMode":"watch|poll|off", ...}`.
+Expect `{"ok":true, "watching":"<dir>", "watchMode":"watch|poll|off", "tokenFile":"...", ...}`.
+
+Scanning a file through the API:
+
+```
+TOKEN=$(cat ~/.kakashi/agent-guard-8797.token)
+curl -s http://127.0.0.1:8797/scan \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+  -d '{"path":"notes/customer.md"}'
+```
 
 ## Never do
 
@@ -55,5 +74,7 @@ Expect `{"ok":true, "watching":"<dir>", "watchMode":"watch|poll|off", ...}`.
   non-loopback origins with 403; do not try to route around that.
 - Never expose the daemon's port through an SSH tunnel or reverse proxy.
   Its threat model is *local*: the trust boundary is the machine.
+- Never print the token into the conversation or paste it into a file; read
+  it from the token file at the moment you call the API.
 - The `/scan` response is intentionally value-free. Do not call `audit`
   from an agent context to "enrich" it.

@@ -293,6 +293,14 @@ POST http://127.0.0.1:8797/scan   { "path": "..." }
 POST http://127.0.0.1:8797/mask   { "path": "...", "output": "..." }
 ```
 
+`/scan` and `/mask` require `Content-Type: application/json` and
+`Authorization: Bearer <token>`, where the token is minted per launch and
+written to `~/.kakashi/agent-guard-<port>.token` (mode 0600). Paths resolve
+against the watched folder and must stay inside it after symlinks are
+resolved; `output` must be a new file there. Requests with an `Origin` header
+or a Host other than `127.0.0.1`, `localhost` or `[::1]` are refused, so a web
+page cannot reach the API, even through DNS rebinding.
+
 Suggested MCP wrapper (pseudo-code — build as a v1.2 companion package):
 
 ```js
@@ -301,8 +309,10 @@ export const kakashi_scan = {
   description: "Scan a file for sensitive data using local Kakashi guard.",
   parameters: { path: "string" },
   handler: async ({ path }) => {
+    const token = (await readFile(`${homedir()}/.kakashi/agent-guard-8797.token`, "utf8")).trim();
     const r = await fetch("http://127.0.0.1:8797/scan", {
       method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ path }),
     });
     return r.json();
