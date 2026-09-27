@@ -209,7 +209,7 @@ transformation capability of its own. Runs in-process — no daemon required. Se
 | **Tampering** | Attacker modifies `patterns.js` to disable a detection rule | Kakashi is installed via npm with signed publisher (`@muhammadatef`). Users can freeze the version in `package.json`. Enterprise mode can be run from `node_modules/@muhammadatef/kakashi` with SHA validation. |
 | **Repudiation** | User denies having exposed a credential that Kakashi flagged | Compliance report + agent-guard JSONL log create an audit trail with UTC timestamps. Downstream: DPO can prove that a warning was surfaced at time T. |
 | **Information Disclosure** | Kakashi itself leaks the secrets it detects | Default output is counts-only. Previews are opt-in via `--verbose`. `audit` is deliberately verbose and documented as such. No telemetry, no phone-home, no error reporting to third parties. |
-| **Denial of Service** | Enormous input file exhausts memory | Streaming per-row for DB. Per-file try/catch in `scan-dir` so one bad file doesn't crash the run. `--limit N` on db-scan enforces a row cap (default 10 000). |
+| **Denial of Service** | Enormous input file exhausts memory; a crafted file makes a pattern run for minutes; a malformed request stalls or kills agent-guard | Streaming per-row for DB. Per-file try/catch in `scan-dir` so one bad file doesn't crash the run. `--limit N` on db-scan enforces a row cap (default 10 000). Patterns use bounded quantifiers and look at most 256 characters around a match, so detection time grows linearly with input. agent-guard caps request bodies at 64 KB (413), opens only regular files up to 64 MB, scans on a worker thread so `/health` always answers, and stops a scan after 60 s, answering 503 "NOT checked" (never clean). |
 | **Elevation of Privilege** | Attacker leverages the daemon's file-read capability to read files outside the watched dir | Guard only reads paths the caller asks it to scan, via the same `formats.readFile` that respects OS-level permissions. Guard has no `setuid` or elevated permissions. |
 
 ---
@@ -300,6 +300,14 @@ against the watched folder and must stay inside it after symlinks are
 resolved; `output` must be a new file there. Requests with an `Origin` header
 or a Host other than `127.0.0.1`, `localhost` or `[::1]` are refused, so a web
 page cannot reach the API, even through DNS rebinding.
+
+Bodies over 64 KB are refused with 413, and only regular files up to 64 MB
+(`KAKASHI_GUARD_MAX_FILE_BYTES`) are opened: `/scan` reports others as
+`skipped` with a `reason`, and `/mask` refuses them. Scans and masks run one at
+a time on a worker thread. One that runs past the limit (`--scan-timeout`,
+`KAKASHI_GUARD_TIMEOUT_MS`, default 60 000 ms) is stopped and answered
+`503 {"checked": false}`; treat that exactly like a finding and do not ship the
+file.
 
 Suggested MCP wrapper (pseudo-code — build as a v1.2 companion package):
 

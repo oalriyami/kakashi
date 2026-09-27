@@ -22,6 +22,13 @@ relative to the watched folder, and anything outside it — including through a
 symlink — is refused with 403. Requests carrying an `Origin` header (web
 pages) or a Host other than `127.0.0.1` / `localhost` are refused too.
 
+Scans run on a worker thread, so `/health` answers even while a large file is
+being checked. A scan that runs past the time limit (`--scan-timeout <ms>`,
+default 60 000) answers `503` with `"checked": false`: the file was **not**
+checked, so do not ship it. Bodies over 64 KB get `413`; directories, pipes
+and files over 64 MB are not opened (`/scan` returns `skipped` with a
+`reason`).
+
 Plus a passive filesystem watcher that scans anything that changes under the
 watched directory and appends a JSONL audit line — useful as a canary a DPO
 can review later.

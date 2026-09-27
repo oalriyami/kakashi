@@ -53,7 +53,9 @@ const SYSTEM_CUSTOM_PROPERTY = /^(ContentTypeId|MSIP_Label_|MediaService|_)/;
 
 function customPropertiesText(xml) {
   const lines = [];
-  const rx = /<property\b[^>]*?\bname\s*=\s*"([^"]*)"[^>]*>([\s\S]*?)<\/property>/g;
+  // Tag scans stop at `<` and a property's body at the next <property>, so an
+  // unclosed one cannot make every later match read to the end (#38).
+  const rx = /<property\b[^<>]*?\bname\s*=\s*"([^"]*)"[^<>]*>((?:(?!<\/?property\b)[\s\S])*)<\/property>/g;
   let m;
   while ((m = rx.exec(xml)) !== null) {
     if (SYSTEM_CUSTOM_PROPERTY.test(m[1])) continue;
@@ -150,7 +152,7 @@ const DOCX_RULES = [
  * false positives on every deck. Footer, date and slide-number placeholders
  * are not in this list: their text does render.
  */
-const PROMPT_PLACEHOLDER = /<p:ph\b(?![^>]*\btype\s*=\s*"(?:dt|ftr|sldNum|hdr)")[^>]*>/;
+const PROMPT_PLACEHOLDER = /<p:ph\b(?![^<>]*\btype\s*=\s*"(?:dt|ftr|sldNum|hdr)")[^<>]*>/;
 
 function withoutPrompts(xml) {
   return xml.replace(/<p:sp\b[\s\S]*?<\/p:sp>/g, (sp) => (PROMPT_PLACEHOLDER.test(sp) ? '' : sp));
@@ -267,12 +269,12 @@ async function contentTypes(zip) {
   const defaults = new Map();
   if (file) {
     const xml = await file.async('string');
-    for (const m of xml.matchAll(/<Override\b[^>]*>/g)) {
+    for (const m of xml.matchAll(/<Override\b[^<>]*>/g)) {
       const part = /PartName\s*=\s*"([^"]*)"/.exec(m[0]);
       const type = /ContentType\s*=\s*"([^"]*)"/.exec(m[0]);
       if (part && type) overrides.set(decodeURIComponent(part[1]).replace(/^\//, '').toLowerCase(), type[1]);
     }
-    for (const m of xml.matchAll(/<Default\b[^>]*>/g)) {
+    for (const m of xml.matchAll(/<Default\b[^<>]*>/g)) {
       const ext = /Extension\s*=\s*"([^"]*)"/.exec(m[0]);
       const type = /ContentType\s*=\s*"([^"]*)"/.exec(m[0]);
       if (ext && type) defaults.set(ext[1].toLowerCase(), type[1]);
@@ -423,12 +425,12 @@ async function dropThumbnail(zip) {
   const rels = zip.file('_rels/.rels');
   if (rels) {
     const xml = await rels.async('string');
-    zip.file('_rels/.rels', xml.replace(/<Relationship\b[^>]*Target="\/?docProps\/thumbnail\.[a-z]+"[^>]*\/>/gi, ''));
+    zip.file('_rels/.rels', xml.replace(/<Relationship\b[^<>]*Target="\/?docProps\/thumbnail\.[a-z]+"[^<>]*\/>/gi, ''));
   }
   const types = zip.file('[Content_Types].xml');
   if (types) {
     const xml = await types.async('string');
-    zip.file('[Content_Types].xml', xml.replace(/<Override\b[^>]*PartName="\/docProps\/thumbnail\.[a-z]+"[^>]*\/>/gi, ''));
+    zip.file('[Content_Types].xml', xml.replace(/<Override\b[^<>]*PartName="\/docProps\/thumbnail\.[a-z]+"[^<>]*\/>/gi, ''));
   }
 }
 

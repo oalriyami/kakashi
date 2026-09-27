@@ -59,9 +59,9 @@ const WORD = {
     // `<w:br w:type="page"/>` is a break too. `<w:tab w:val=… w:pos=…/>` is a
     // tab STOP definition inside paragraph properties, not a tab character,
     // which is why only the attribute-less form counts.
-    { rx: '<w:(?:br|cr)\\b[^>]*?/>', text: '\n' },
+    { rx: '<w:(?:br|cr)\\b[^<>]*?/>', text: '\n' },
     { rx: '<w:tab\\s*/>', text: '\t' },
-    { rx: '<w:ptab\\b[^>]*?/>', text: '\t' },
+    { rx: '<w:ptab\\b[^<>]*?/>', text: '\t' },
     { rx: '<w:noBreakHyphen\\s*/>', text: '-' },
   ],
 };
@@ -74,7 +74,7 @@ const WORD = {
 const DRAWING = {
   paraTag: 'a:p',
   textTags: ['a:t'],
-  marks: [{ rx: '<a:br\\b[^>]*?>', text: '\n' }],
+  marks: [{ rx: '<a:br\\b[^<>]*?>', text: '\n' }],
 };
 
 const ENTITIES = [
@@ -129,10 +129,13 @@ function tokenizer(spec) {
   const alts = [
     // `<w:p>` and `<w:p …>` open a paragraph; `<w:pPr>` must not, hence the
     // lookahead. A self-closing `<w:p/>` is empty and opens nothing.
-    `(?<popen><${p}(?=[\\s>/])[^>]*?(?<pself>/?)>)`,
+    // Attribute scans stop at `<`, which XML never allows inside a tag: with
+    // `[^>]*` every unclosed `<w:p ` read to the end of the part, and a part
+    // full of them took quadratic time (#38).
+    `(?<popen><${p}(?=[\\s>/])[^<>]*?(?<pself>/?)>)`,
     `(?<pclose></${p}>)`,
     // Self-closing `<w:t/>` holds no text and has no inner range.
-    `<(?<ttag>${spec.textTags.map(esc).join('|')})(?<tattr>\\s[^>]*?)?(?<!/)>(?<ttext>[^<]*)</\\k<ttag>>`,
+    `<(?<ttag>${spec.textTags.map(esc).join('|')})(?<tattr>\\s[^<>]*?)?(?<!/)>(?<ttext>[^<]*)</\\k<ttag>>`,
     ...spec.marks.map((m, i) => `(?<m${i}>${m.rx})`),
   ];
   const rx = new RegExp(alts.join('|'), 'g');
@@ -399,7 +402,7 @@ function maskXml(xml, replMap, spec) {
  */
 function findElements(xml, names) {
   if (!names || names.length === 0) return [];
-  const rx = new RegExp(`<(${names.map(esc).join('|')})(\\s[^>]*?)?(?<!/)>([^<]*)</\\1>`, 'g');
+  const rx = new RegExp(`<(${names.map(esc).join('|')})(\\s[^<>]*?)?(?<!/)>([^<]*)</\\1>`, 'g');
   const out = [];
   let m;
   while ((m = rx.exec(xml)) !== null) {

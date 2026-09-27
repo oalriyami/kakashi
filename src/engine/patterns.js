@@ -248,6 +248,30 @@ function isOrgOrPlace(tokens) {
 }
 
 /**
+ * Where the current line starts, looking back at most `max` characters.
+ *
+ * `text.lastIndexOf('\n', idx)` walks back to the start of the line however
+ * long it is, and these checks run once per match: on a one-line JSON file of
+ * a few megabytes that made detection quadratic -- 2 MB of hashes took 71 s
+ * (#38). A line start further back than `max` is treated as `idx - max`.
+ */
+function lineStartWithin(text, idx, max) {
+  const from = Math.max(0, idx - max);
+  const nl = text.slice(from, idx).lastIndexOf('\n');
+  return nl === -1 ? from : from + nl + 1;
+}
+
+/** Where the current line ends, looking ahead at most `max` characters. */
+function lineEndWithin(text, idx, max) {
+  const to = Math.min(text.length, idx + max);
+  const nl = text.slice(idx, to).indexOf('\n');
+  return nl === -1 ? to : idx + nl;
+}
+
+/** How far the line-context checks look on either side of a match. */
+const LINE_CONTEXT = 256;
+
+/**
  * Shared gate for both name patterns.
  * @param {string[]} tokens - the match split into words
  * @param {Set<string>} common - ordinary words of that language
@@ -266,9 +290,9 @@ function looksLikeName(tokens, common, text, idx) {
 
   // Structural signal: a Markdown heading is a section title, not a person.
   // Checked against the line so far rather than the whole document.
-  const lineStart = text.lastIndexOf('\n', idx - 1) + 1;
-  const linePrefix = text.slice(lineStart, idx);
-  if (/^\s{0,3}#{1,6}\s[^\n]*$/.test(linePrefix)) return false;
+  const lineStart = lineStartWithin(text, idx, LINE_CONTEXT);
+  const prefix = text.slice(lineStart, idx);
+  if ((lineStart === 0 || text[lineStart - 1] === '\n') && /^\s{0,3}#{1,6}\s[^\n]*$/.test(prefix)) return false;
 
   // Otherwise: keep the match unless every token is an ordinary word.
   return !tokens.every((w) => common.has(w.toLowerCase()));
@@ -279,7 +303,10 @@ function looksLikeName(tokens, common, text, idx) {
 // ---------------------------------------------------------------------------
 
 /** A key that names a secret: `DB_PASSWORD`, `client_secret`, `ApiKey`. No capture groups. */
-const SECRET_KEY = '(?:[A-Za-z_][\\w.-]*)?(?:PASSWORD|PASSWD|PWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|SECRET[_-]?KEY|CREDENTIAL|HOST|BUCKET|SIGNATURE|HMAC|DSN|WEBHOOK)[\\w.-]*';
+// The name around the keyword is bounded (real keys are well under 100
+// characters). Unbounded, `[\w.-]*` on both sides made every start in a long
+// `a-a-a-…` run scan the rest of the run for a keyword: quadratic (#38).
+const SECRET_KEY = '(?:[A-Za-z_][\\w.-]{0,100})?(?:PASSWORD|PASSWD|PWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|SECRET[_-]?KEY|CREDENTIAL|HOST|BUCKET|SIGNATURE|HMAC|DSN|WEBHOOK)[\\w.-]{0,100}';
 
 /**
  * Split an env_secret match into its key and value, for each of its forms:
@@ -362,10 +389,9 @@ const HEX_SECRET_CUE_RX = /secret|token|passw(?:or)?d|api[ _-]?key|private[ _-]?
  */
 function looksLikeHashReference(match, text, idx) {
   if (![40, 64, 128].includes(match.length)) return false;
-  const lineStart = text.lastIndexOf('\n', idx - 1) + 1;
-  const lineEnd = text.indexOf('\n', idx + match.length);
+  const lineStart = lineStartWithin(text, idx, LINE_CONTEXT);
   const before = text.slice(lineStart, idx);
-  const after = text.slice(idx + match.length, lineEnd === -1 ? text.length : lineEnd);
+  const after = text.slice(idx + match.length, lineEndWithin(text, idx + match.length, LINE_CONTEXT));
   if (HEX_SECRET_CUE_RX.test(before)) return false;
   if (HASH_CUE_RX.test(before)) return true;
   if (/(?:\/commits?\/|\/blob\/|\/tree\/|\/compare\/[^\s]*|@|#)$/.test(before)) return true;
@@ -399,8 +425,7 @@ const AWS_SECRET_CUE_RX = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\baws\b|aws_|secret[ \t
 
 /** Up to `max` characters of the current line before `idx`. */
 function linePrefix(text, idx, max) {
-  const lineStart = text.lastIndexOf('\n', idx - 1) + 1;
-  return text.slice(Math.max(lineStart, idx - max), idx);
+  return text.slice(lineStartWithin(text, idx, max), idx);
 }
 
 /** A label that says the next value is a passport number. */
@@ -588,7 +613,9 @@ function isValidIban(iban) {
  * One Title Case word of a Latin name: `Sarah`, `Al-Kaabi`, `Jean-Luc`,
  * `O'Brien`, `McDonald`, `MacLeod`.
  */
-const TITLE_WORD = "(?:[A-Z]['’][A-Z][a-z]+|(?:Mc|Mac)?[A-Z][a-z]+(?:-[A-Z]?[a-z]+)*)";
+// At most three hyphens (`Al-Kaabi`, `Jean-Pierre`, `Bin-Al-Nahyan`).
+// Unbounded, a long `Ab-Ab-Ab-…` run was re-scanned from every start: quadratic (#38).
+const TITLE_WORD = "(?:[A-Z]['’][A-Z][a-z]+|(?:Mc|Mac)?[A-Z][a-z]+(?:-[A-Z]?[a-z]+){0,3})";
 /** Lower-case connectors a Title Case name may contain: `bin`, `dela`, `van`. */
 const NAME_PARTICLE = '(?:bin|bint|ibn|al|el|de|del|dela|della|da|das|dos|du|van|von|der|den|le|la|di|y)';
 /**
@@ -835,7 +862,10 @@ const BASE_PATTERNS = [
     label: 'Email',
     labelAr: 'بريد إلكتروني',
     cat: 'pii',
-    rx: /\b[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}\b/g,
+    // Bounded at the RFC limits (64-character local part, 253-character
+    // domain). Unbounded, every word boundary in a long `a.a.a.…` run consumed
+    // the rest of the run and backed off looking for an `@`: quadratic (#38).
+    rx: /\b[\w.+-]{1,64}@[\w.-]{1,253}\.[a-zA-Z]{2,63}\b/g,
     // `logo@2x.png` is a file name. Only extensions that are not also real
     // top-level domains are rejected (`.md`, `.zip`, `.mov` are TLDs).
     validate: (match) => !FILE_EXTENSION_TLD_RX.test(match),
@@ -982,7 +1012,11 @@ const BASE_PATTERNS = [
     // PEM and OpenSSH keys, password-protected PKCS#8 (`ENCRYPTED PRIVATE
     // KEY`), DSA, and PGP secret-key blocks. The END line must name the same
     // block as the BEGIN line.
-    rx: /-----BEGIN ((?:RSA |EC |DSA |OPENSSH |ENCRYPTED |PGP )?PRIVATE KEY(?: BLOCK)?)-----[\s\S]*?-----END \1-----/g,
+    // The body is bounded -- the largest real private key (16384-bit RSA) is
+    // about 12.6 KB -- and stops at the next BEGIN line. Unbounded, every
+    // BEGIN without an END scanned to the end of the text: quadratic on
+    // repeated headers (#38).
+    rx: /-----BEGIN ((?:RSA |EC |DSA |OPENSSH |ENCRYPTED |PGP )?PRIVATE KEY(?: BLOCK)?)-----(?:(?!-----BEGIN )[\s\S]){0,20000}?-----END \1-----/g,
     fakeValues: ['-----BEGIN PRIVATE KEY-----\n[REDACTED]\n-----END PRIVATE KEY-----'],
   },
   {
@@ -1138,11 +1172,17 @@ const BASE_PATTERNS = [
     //   CREATE USER app IDENTIFIED WITH mysql_native_password BY 'S3cret!';  -- MySQL 8
     //   ALTER USER app IDENTIFIED BY PASSWORD '*HASH...';         -- MySQL legacy hash
     //   ... ENCRYPTED BY 'keymaterial'                            -- Oracle TDE
-    // We anchor on the keyword via lookbehind and mask ONLY the quoted value,
+    // The keyword is matched and ONLY the quoted value (group 1) is masked,
     // leaving the surrounding statement readable. The `=` forms
     // (e.g. SQL Server `WITH PASSWORD = '...'`, ADO `Password=...;`) are
     // intentionally left to `env_secret` so the two patterns never overlap.
-    rx: /(?<=\b(?:IDENTIFIED(?:\s+WITH\s+[\w.]+)?\s+BY|PASSWORD|ENCRYPTED\s+BY)\s+(?:PASSWORD\s+)?)(?:'[^'\n]*'|"[^"\n]*"|`[^`\n]*`)/gi,
+    //
+    // This used to be a lookbehind with unbounded `\s+`: at every position of
+    // a long run of whitespace the engine walked back through the whole run
+    // looking for the keyword, so 32 KB of spaces took seconds and 64 KB timed
+    // out (#38). Consuming the keyword, with bounded gaps, is linear.
+    rx: /\b(?:IDENTIFIED(?:\s{1,20}WITH\s{1,20}[\w.]{1,64})?\s{1,20}BY|PASSWORD|ENCRYPTED\s{1,20}BY)\s{1,20}(?:PASSWORD\s{1,20})?('[^'\n]*'|"[^"\n]*"|`[^`\n]*`)/gi,
+    valueGroups: [1],
     fakeValues: ["'P@ssw0rd!'"],
   },
   {

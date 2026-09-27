@@ -198,8 +198,24 @@ function runPatternTests() {
   // MATCH itself span a line.
   // -------------------------------------------------------------------------
   const MULTILINE_BY_DESIGN = new Set(['ssh_key']);
+  // Patterns that MATCH a keyword as context but replace only a value group
+  // that cannot cross a line. `sql_password` used to express its keyword as a
+  // lookbehind (exempt above); a lookbehind with `\s+` is quadratic on long
+  // whitespace (#38), so it now consumes the keyword and masks group 1, a
+  // quoted string that excludes newlines.
+  const CONTEXT_THEN_SINGLE_LINE_VALUE = new Set(['sql_password']);
+  for (const id of CONTEXT_THEN_SINGLE_LINE_VALUE) {
+    const p = PATTERNS.find((x) => x.id === id);
+    const value = p && p.valueGroups ? new RegExp(p.rx.source, 'gi').exec("IDENTIFIED BY\n  'S3cret!'") : null;
+    if (!value || value[1] !== "'S3cret!'" || /\n/.test(value[1])) {
+      console.error(`FAIL ${id} must match multi-line SQL but mask only a single-line quoted value`);
+      failed++;
+    } else {
+      passed++;
+    }
+  }
   for (const p of PATTERNS) {
-    if (MULTILINE_BY_DESIGN.has(p.id) || !p.rx) continue;
+    if (MULTILINE_BY_DESIGN.has(p.id) || CONTEXT_THEN_SINGLE_LINE_VALUE.has(p.id) || !p.rx) continue;
     // Strip character classes that legitimately contain \s as a NEGATED
     // terminator (e.g. [^\s"'<>]) and the env_secret leading lookbehind, which
     // must allow a newline before a KEY.

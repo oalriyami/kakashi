@@ -48,8 +48,10 @@ const GREETINGS = ['hi', 'hello', 'hey', 'dear', 'thanks', 'thank you', 'thx', '
 /** Titles, after which a family name alone is a person too. */
 const TITLES = ['mr', 'mrs', 'ms', 'miss', 'mx', 'dr', 'prof', 'eng', 'sheikh', 'sheikha', 'attn'];
 const SALUTATION_RX = new RegExp(
-  `(?<![\\p{L}\\p{M}])(${[...GREETINGS, ...TITLES].map((w) => w.replace(' ', '[ \\t]+')).join('|')})`
-  + '(?![\\p{L}\\p{M}])\\.?[ \\t]*[,:!]?[ \\t]*(?:\\r?\\n[ \\t]*)?'
+  `(?<![\\p{L}\\p{M}])(${[...GREETINGS, ...TITLES].map((w) => w.replace(' ', '[ \\t]{1,8}')).join('|')})`
+  // Bounded gaps: two adjacent unbounded `[ \t]*` runs backtrack quadratically
+  // over a long run of blanks after a greeting (#38).
+  + '(?![\\p{L}\\p{M}])\\.?[ \\t]{0,8}[,:!]?[ \\t]{0,8}(?:\\r?\\n[ \\t]{0,8})?'
   + '(?=[A-Za-z\\u00C0-\\u024F])',
   'giu',
 );
@@ -192,6 +194,30 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
     return runs;
   }
 
+  /**
+   * Up to `max` Latin words starting exactly at `at` and separated only by
+   * spaces or tabs, with offsets relative to `at` (the shape latinWords gives).
+   */
+  function wordsAt(text, at, max) {
+    const words = [];
+    const rx = new RegExp(LATIN_WORD_RX.source, 'y');
+    let pos = at;
+    while (words.length < max) {
+      rx.lastIndex = pos;
+      const m = rx.exec(text);
+      if (!m) break;
+      const raw = m[0].replace(/['’-]+$/, '');
+      words.push({ raw, start: pos - at, end: pos - at + raw.length });
+      // As in latinWords, the gap is measured from the end of the word with
+      // its trailing apostrophes and hyphens removed.
+      const gap = /[ \t]+/y;
+      gap.lastIndex = pos + raw.length;
+      if (!gap.test(text)) break;
+      pos = gap.lastIndex;
+    }
+    return words;
+  }
+
   const caseOf = (w) => {
     if (w === w.toLowerCase()) return 'lower';
     if (w === w.toUpperCase()) return 'upper';
@@ -247,11 +273,11 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
       const word = m[1].toLowerCase().replace(/\s+/g, ' ');
       const isTitle = TITLES.includes(word);
       const at = m.index + m[0].length;
-      // The name and anything after it on the same line.
-      const lineEnd = text.indexOf('\n', at);
-      const rest = text.slice(at, lineEnd === -1 ? text.length : lineEnd);
-      const run = latinWords(rest)[0];
-      if (!run || run[0].start !== 0) continue;
+      // The name after the greeting is at most five words, read straight from
+      // the text. Slicing and splitting the whole rest of the line for every
+      // greeting was quadratic on a long line (#38).
+      const run = wordsAt(text, at, 6);
+      if (!run.length) continue;
       const first = run[0].raw;
       if (isCommonEn(first) || isAmbiguousName(first)) continue;
       if (!(isGivenName(first) || (isTitle && isFamilyName(first)))) continue;
@@ -315,19 +341,23 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
       return last >= 0 && reach[last] > start;
     };
     const spans = [];
-    for (const p of parts) {
-      const esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const rx = new RegExp(`(?<![${letter}'’-])${esc}(?![${letter}'’-])`, 'gu');
-      let m;
-      while ((m = rx.exec(text)) !== null) {
-        const start = m.index;
-        const end = start + p.length;
-        // Only occurrences OUTSIDE the full names they came from: inside one,
-        // the full name already covers it (and a whitelisted full name must
-        // not leak its first word).
-        if (covered(start, end)) continue;
-        spans.push({ start, end, original: p, confidence: 'medium' });
-      }
+    if (parts.size === 0) return spans;
+    // One pass over the text. An occurrence counts only where it is not glued
+    // to another letter, apostrophe or hyphen on either side -- which makes it
+    // exactly a maximal run of those characters, so a Set lookup per run gives
+    // the same answer one regex per part did, without scanning the text once
+    // per distinct name (16,000 names in 810 KB took 36 s, #38).
+    const runRx = new RegExp(`[${letter}'’-]+`, 'gu');
+    let m;
+    while ((m = runRx.exec(text)) !== null) {
+      if (!parts.has(m[0])) continue;
+      const start = m.index;
+      const end = start + m[0].length;
+      // Only occurrences OUTSIDE the full names they came from: inside one,
+      // the full name already covers it (and a whitelisted full name must
+      // not leak its first word).
+      if (covered(start, end)) continue;
+      spans.push({ start, end, original: m[0], confidence: 'medium' });
     }
     return spans;
   }

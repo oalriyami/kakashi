@@ -697,11 +697,13 @@ program
   .option('--log <path>', 'Append JSONL audit events to this file')
   .option('--auto-mask', 'Automatically write masked_<file> when scan finds anything')
   .option('--token-file <path>', 'Where to write the API token (default: ~/.kakashi/agent-guard-<port>.token)')
+  .option('--scan-timeout <ms>', 'Stop a scan or mask after this many milliseconds and report the file as not checked (default: 60000)')
   .action(async (options) => {
     const guard = require('../src/agent/guard');
     let handle;
     try {
       const guardOptions = {
+        scanTimeoutMs: options.scanTimeout === undefined ? undefined : Number(options.scanTimeout),
         watch: options.watch,
         port: parseInt(options.port, 10),
         log: options.log,
@@ -716,6 +718,8 @@ program
             console.log(chalk.gray(`[api] /scan ${e.path} → ${e.findings} finding(s)`));
           } else if (e.kind === 'api_mask') {
             console.log(chalk.gray(`[api] /mask ${e.path} → ${e.findings} replacement(s)`));
+          } else if (e.kind === 'scan_timeout') {
+            console.log(chalk.red(`[guard] ${e.path} — NOT checked: the scan ran past ${e.timeoutMs} ms and was stopped`));
           } else if (e.kind === 'api_refused') {
             console.log(chalk.yellow(`[api] refused (${e.status}): ${e.reason}`));
           }

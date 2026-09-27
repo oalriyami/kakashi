@@ -114,6 +114,52 @@ to 3.
 
 ### Fixed
 
+- **agent-guard survives bad requests** (#37). A client that disconnected
+  mid-body killed the daemon (an unhandled rejection), a body of any size was
+  buffered whole (400 MB was accepted), `/mask` on a named pipe hung the
+  daemon for good, and an audit log in a folder that was later removed
+  crashed it on its next event. Now every request is handled inside a
+  try/catch that answers 500 rather than exiting; an aborted body is logged
+  as `request_aborted`; bodies over 64 KB are refused with 413 (declared or
+  streamed); a body must be a JSON object with a non-empty string `path`;
+  only regular files up to 64 MB (`KAKASHI_GUARD_MAX_FILE_BYTES`) are opened
+  -- `/scan` returns `skipped` with `not_a_file` or `too_large`, `/mask`
+  answers 400 or 413; malformed HTTP gets 400. The log file is checked at
+  start (a missing folder stops start-up with a clear message), and a log
+  that fails later is reported once as `log_failed` while the daemon keeps
+  serving.
+- **No input of a few kilobytes takes seconds** (#38). Several patterns did
+  quadratic work: 64 KB of spaces or newlines ran for over a minute
+  (`sql_password`'s lookbehind), `a.a.a.…` took 4 s (`email`), `hi hi …` over
+  8 s (greetings), a 810 KB list of names 36 s (repeated names) and a 2 MB
+  line of SHA-1s 71 s. Every one now runs in well under a second (the SHA-1
+  line in 0.5 s); ordinary text runs about 30% faster, with identical
+  findings on 480 test files apart from the private-key change below. The
+  changes:
+  - quantifiers are bounded: an email's local part to 64 characters and its
+    domain to 253, the words around a secret key word to 100, a PEM body to
+    20,000 characters, hyphenated title words to four parts, whitespace in
+    SQL and greetings to 20 and 8;
+  - a private-key block ends at its own END line and never runs past the next
+    BEGIN line: a truncated key used to swallow everything up to a later
+    key's END;
+  - `sql_password` matches its keyword and masks the quoted value alone
+    instead of looking behind with `\s+`;
+  - the greeting check reads the name straight from the text instead of
+    splitting the rest of the line each time, and repeated names are found in
+    one pass instead of one search per name;
+  - line context (headings, labels, hash references) is read at most 256
+    characters either side of a match. A cue further away on the same very
+    long line no longer counts;
+  - OOXML and package tag scans stop at `<`, so a part full of unclosed
+    `<w:p ` or `<w:t ` tags is read in linear time.
+
+  agent-guard also scans on a worker thread now, so `/health` answers while a
+  large file is checked, and a scan or mask that runs past a time limit
+  (`--scan-timeout`, `KAKASHI_GUARD_TIMEOUT_MS`, default 60 s) is stopped and
+  answered `503 {"checked": false}` -- never reported clean. Passive scans
+  that time out are logged as `scan_timeout`; `/health` reports
+  `scanTimeoutMs` and `scansTimedOut`.
 - **Originals are not overwritten unless asked** (#35). `mask app.env -o
   app.env` replaced the original without a word, `db-mask x.db -o x.db`
   replaced a SQLite database with JSONL, and `mask --overwrite` without a
