@@ -2,7 +2,7 @@
 
 Internal draft. Customize before posting.
 
-> **Hero image:** attach `logo.png` (1024×1024) from the repo root — that's the Kakashi mask icon you'll use across all socials.
+> **Hero image:** attach `docs/assets/logo.png` (512×512) — that's the Kakashi mask icon you'll use across all socials.
 > **Latest draft:** see "Post option V1.2 (RECOMMENDED — the Guardian release)" immediately below. It announces the Guardian loop, run-aware .docx/.pptx masking, and the now-proven database drivers. It carries a prerequisite: the branch must be merged and published first.
 >
 > **v1.1 launch:** see the "Post option V1.1" section — it announces the UAE-native features, database masking, and the agent-guard daemon.
@@ -394,8 +394,8 @@ npm:    https://www.npmjs.com/package/@muhammadatef/kakashi
 
 | Asset | File | Purpose |
 | --- | --- | --- |
-| **Primary launch image** | `og-card.png` (1200×630) | LinkedIn / Twitter / Slack — the wordmark + tagline + Kakashi icon. Use as the post hero. |
-| Square avatar / icon | `logo.png` (1024×1024) or `logo-256.png` (256×256) | GitHub social preview, profile-pic-style fallback |
+| **Primary launch image** | `docs/assets/og-card.jpg` (1200×630) | LinkedIn / Twitter / Slack — the wordmark + tagline + Kakashi icon. Use as the post hero. |
+| Square avatar / icon | `docs/assets/logo.png` (512×512) or `logo-256.png` (256×256) | GitHub social preview, profile-pic-style fallback |
 | Tiny avatar | `logo-64.png` (64×64) | Favicon, npm sidebar |
 | Screenshot 1 | terminal `kakashi scan` output (categorized) | Proves the engine works |
 | Screenshot 2 | Cursor chat showing `/kakashi-scan` | Proves the in-agent flow |
@@ -404,7 +404,7 @@ npm:    https://www.npmjs.com/package/@muhammadatef/kakashi
 
 ### GitHub social preview (do this once after `git push`)
 
-Settings → Options → "Social preview" → upload **`og-card.png`**.
+Settings → Options → "Social preview" → upload **`docs/assets/og-card.jpg`**.
 This image will then render as the link card whenever someone pastes the GitHub URL into LinkedIn, Twitter, Slack, Discord, etc.
 
 ---
@@ -420,6 +420,6 @@ This image will then render as the link card whenever someone pastes the GitHub 
 - [ ] GitHub repo is public + has description, topics, and README rendering correctly
 - [ ] npm package is live (`npm view @muhammadatef/kakashi`)
 - [ ] At least one of the three screenshots in hand
-- [ ] `logo.png` ready as the post hero
+- [ ] `docs/assets/logo.png` ready as the post hero
 - [ ] First comment ready with a "ask me anything" or a follow-up CTA (boosts engagement)
 - [ ] Tag relevant hashtags but cap at ~5 in the post body, more in the first comment

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./og-card.png" alt="Kakashi — hide what shouldn't leave your machine" width="100%"/>
+<img src="./docs/assets/og-card.jpg" alt="Kakashi — hide what shouldn't leave your machine" width="100%"/>
 
 </div>
 

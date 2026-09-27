@@ -24,7 +24,7 @@ Explain:
 Point the presenter to:
 
 - `demos/.work/output/impact.json`
-- `presentation/Kakashi_Manager_Briefing.pptx`
+- `presentation/Kakashi_Manager_Briefing.pptx` (build it with `npm run docs:deck`, or take it from the latest GitHub release)
 - `demos/CURSOR_CHAT_DEMO.md`
 
 End with: `Cursor Chat demonstration complete.`

@@ -59,6 +59,16 @@ to 3.
   `Finance Department`, `شارع …`, `أبو ظبي`. The veto outranks a name cue.
 - **Form headers are no longer names**: `Full Name`, `Place Of Birth`,
   `Residence Visa`.
+- **A lighter repository** (#21). The tracked working tree drops from about
+  8.5 MB to 1.3 MB; the npm package was never affected. The 5 MB demo video
+  is no longer in the tree, and `og-card.png` (627 KB) and `logo.png` (993 KB)
+  are now `docs/assets/og-card.jpg` (60 KB) and `docs/assets/logo.png`
+  (170 KB, 512×512). Generated documents are no longer committed:
+  `npm run docs:pdf` builds the technical implementation PDF (set `CHROME` to
+  the browser binary), the new `npm run docs:deck` builds the briefing deck,
+  and `.github/workflows/release-docs.yml` builds both and attaches them to
+  every GitHub release. Working notes (`LINKEDIN.md`, `changes_23Sept.md`,
+  `commands_to_run_to_test.md`) moved to `docs/notes/`.
 
 ### Fixed
 

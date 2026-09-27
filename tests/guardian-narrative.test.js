@@ -3,7 +3,7 @@
  *
  * Locks the human-terminal render for `kakashi guard` against two regressions:
  *
- *  1. Every stage label from the plan in changes_23Sept.md must appear.
+ *  1. Every stage label from the plan in docs/notes/changes_23Sept.md must appear.
  *     THINK / OBSERVE / ASSESS / PLAN / ACT / VERIFY / REACT — in that order.
  *     An agent narrating the loop reads these labels to explain what Guardian
  *     did; dropping one silently breaks the "show your thinking" contract.
@@ -78,7 +78,7 @@ async function runGuardianNarrativeTests() {
   const rendered = stripAnsi(renderRun(result, result.state.context));
 
   await check('renderRun contains every plan-mandated stage label', () => {
-    // The seven stage labels from changes_23Sept.md must all appear as
+    // The seven stage labels from docs/notes/changes_23Sept.md must all appear as
     // section headings. They live on their own line with no prefix, so we
     // match line-anchored to avoid picking up an incidental word.
     const REQUIRED = ['THINK', 'OBSERVE', 'ASSESS', 'PLAN', 'ACT', 'VERIFY', 'REACT'];

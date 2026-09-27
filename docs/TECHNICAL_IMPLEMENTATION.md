@@ -8,7 +8,7 @@
 > [ARCHITECTURE.md](ARCHITECTURE.md), [AGENTIC_ARCHITECTURE.md](AGENTIC_ARCHITECTURE.md)
 > and the [README](../README.md).
 
-> **Cover copy for the printable PDF:** see [`TECHNICAL_IMPLEMENTATION.html`](TECHNICAL_IMPLEMENTATION.html) (Chrome-optimised, A4, 16 pages) and the pre-rendered [`TECHNICAL_IMPLEMENTATION.pdf`](TECHNICAL_IMPLEMENTATION.pdf) in this folder.
+> **Cover copy for the printable PDF:** see [`TECHNICAL_IMPLEMENTATION.html`](TECHNICAL_IMPLEMENTATION.html) (Chrome-optimised, A4, 16 pages) Build the PDF with `npm run docs:pdf`; each GitHub release also carries it.
 >
 > This Markdown file is the GitHub-readable source of truth for the same content.
 

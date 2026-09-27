@@ -71,7 +71,7 @@ function header(result, context) {
  * THINK -- restate the ask in one line, in the order the reader thinks about
  * it (who is asking, for what, to send where). The rest of the transcript
  * only makes sense once this line is on the page. Emitted right after the
- * header for parity with the loop diagram used in changes_23Sept.md.
+ * header for parity with the loop diagram used in docs/notes/changes_23Sept.md.
  */
 function thinkSection(result, context) {
   const lines = [];
@@ -234,7 +234,7 @@ function actSection(execResult, iteration, total) {
  * Interleave each iteration's plan with the act that carried it out and the
  * verification that judged the outcome, so the transcript reads in the exact
  * order the events actually happened. Mirrors the loop diagram in
- * changes_23Sept.md: THINK -> OBSERVE -> ASSESS -> PLAN -> ACT -> VERIFY -> REACT.
+ * docs/notes/changes_23Sept.md: THINK -> OBSERVE -> ASSESS -> PLAN -> ACT -> VERIFY -> REACT.
  */
 function iterationSections(result) {
   const plans = (result.state && result.state.authorizedPlans) || [];
@@ -253,7 +253,7 @@ function iterationSections(result) {
 function decisionSection(result) {
   const style = DECISION_STYLE[result.decision];
   const lines = [];
-  // Header reads REACT per the loop diagram in changes_23Sept.md ("what the
+  // Header reads REACT per the loop diagram in docs/notes/changes_23Sept.md ("what the
   // Guardian did with the verification result"), with the terminal decision
   // label immediately underneath so downstream consumers can still grep on it.
   lines.push(chalk.white('REACT'));

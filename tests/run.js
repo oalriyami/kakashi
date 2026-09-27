@@ -37,7 +37,7 @@ const { runDocsTests } = require('./docs.test');
   ok = (await runTaskTests()) && ok;
   ok = runAgentRuleTests() && ok;
   ok = runCursorDemoTests() && ok;
-  // v1.2+ additions from changes_23Sept.md:
+  // v1.2+ additions from docs/notes/changes_23Sept.md:
   ok = runOrchestratorTests() && ok;
   ok = (await runGuardianNarrativeTests()) && ok;
   ok = (await runGuardFallbackTests()) && ok;

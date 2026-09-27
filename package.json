@@ -22,8 +22,9 @@
   "scripts": {
     "install-agents": "node bin/install.js",
     "test": "node tests/run.js",
-    "docs:pdf": "chromium --headless --disable-gpu --no-sandbox --no-pdf-header-footer --print-to-pdf=docs/TECHNICAL_IMPLEMENTATION.pdf --virtual-time-budget=5000 --run-all-compositor-stages-before-draw \"file://$PWD/docs/TECHNICAL_IMPLEMENTATION.html\"",
-    "docs:metrics": "node scripts/build-metric-evidence.js"
+    "docs:pdf": "${CHROME:-chromium} --headless --disable-gpu --no-sandbox --no-pdf-header-footer --print-to-pdf=docs/TECHNICAL_IMPLEMENTATION.pdf --virtual-time-budget=5000 --run-all-compositor-stages-before-draw \"file://$PWD/docs/TECHNICAL_IMPLEMENTATION.html\"",
+    "docs:metrics": "node scripts/build-metric-evidence.js",
+    "docs:deck": "node presentation/build.js && soffice --headless --convert-to pptx --outdir presentation presentation/Kakashi_Manager_Briefing.fodp && soffice --headless --convert-to pdf --outdir presentation presentation/Kakashi_Manager_Briefing.fodp"
   },
   "dependencies": {
     "xlsx": "^0.18.5",
