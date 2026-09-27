@@ -1,5 +1,5 @@
 /**
- * Row-cap pushdown for the SQL drivers.
+ * Row caps for the database drivers.
  *
  * `--limit` used to be enforced only in `streamMasked`, by counting rows as they
  * came back and breaking out of the loop. That is a cap on how much Kakashi
@@ -7,37 +7,63 @@
  * matter most buffer the whole result set before yielding anything
  * (`pg`'s `client.query()` and `snowflake-sdk`'s `execute()` both resolve with a
  * complete row array). Pointing `db-mask` at a production table therefore pulled
- * the entire table into Node's heap before a `--limit 100` had any effect, which
- * is an out-of-memory risk dressed up as a streaming API.
+ * the entire table into Node's heap before a `--limit 100` had any effect.
  *
- * Wrapping the caller's statement in a derived table puts the cap where it
- * belongs: the server stops producing rows. The alias is required -- MySQL and
- * Postgres both reject an unaliased derived table -- and the trailing semicolon
- * has to go, or the wrap produces a syntax error.
+ * Postgres now reads through a server-side cursor (./postgres.js). The other SQL
+ * drivers wrap the caller's statement in a derived table so the server stops
+ * producing rows. The alias is required -- MySQL and Postgres both reject an
+ * unaliased derived table -- and the trailing semicolon has to go. The
+ * statement sits on its own lines, so a trailing `-- comment` cannot swallow the
+ * closing parenthesis.
  *
- * This is deliberately a plain textual wrap rather than a parser. It holds for
- * the `SELECT` and `WITH … SELECT` statements `db-scan` / `db-mask` exist to
- * run, on every SQL engine Kakashi drives (Postgres, MySQL, SQLite, Snowflake,
- * Databricks). It does NOT hold for statements that cannot appear in a
- * subquery, such as `SHOW TABLES`, `EXPLAIN` or a CALL -- those now surface a
- * database syntax error instead of silently reading everything. The row-count
- * break in `streamMasked` stays as a second line of defence for the drivers
- * that genuinely stream (mongodb, sqlite) and for anything a future driver does
- * differently.
+ * The wrap is also a SAFETY property, not only a size cap: a `DELETE`, `DROP`
+ * or `UPDATE` cannot appear inside a derived table, so the database rejects it
+ * before running anything. That is why an unusable limit is an error (#34).
+ * `--limit 0`, `-5` or `abc` used to leave the statement unwrapped, and
+ * `db-scan "$PG" -q "DELETE FROM customers" --limit abc` deleted every row
+ * while reporting "0 rows, clean".
  */
 
 const ALIAS = 'kakashi_limited';
 
+/** The largest cap accepted. Above this, a scan is an export, not a check. */
+const MAX_LIMIT = 10000000;
+const DEFAULT_LIMIT = 10000;
+
 /**
- * @param {string} sql - the caller's statement
- * @param {number} [limit] - maximum rows; omitted/invalid leaves `sql` untouched
- * @returns {string}
+ * Parse a `--limit` value. Only a whole number from 1 to MAX_LIMIT is a limit.
+ * @param {string|number|undefined} value - undefined means the default
+ * @returns {number}
+ * @throws when the value is anything else
  */
-function sqlWithLimit(sql, limit) {
-  if (!Number.isInteger(limit) || limit <= 0) return sql;
-  const trimmed = String(sql).trim().replace(/;\s*$/, '');
-  if (!trimmed) return sql;
-  return `SELECT * FROM (${trimmed}) AS ${ALIAS} LIMIT ${limit}`;
+function parseLimit(value) {
+  if (value === undefined || value === null) return DEFAULT_LIMIT;
+  const text = String(value).trim();
+  const n = /^[1-9]\d*$/.test(text) ? Number(text) : NaN;
+  if (!Number.isSafeInteger(n) || n > MAX_LIMIT) {
+    throw new Error(`--limit must be a whole number from 1 to ${MAX_LIMIT}, got "${String(value)}"`);
+  }
+  return n;
 }
 
-module.exports = { sqlWithLimit, ALIAS };
+/** The caller's statement without trailing semicolons and whitespace. */
+function stripStatement(sql) {
+  return String(sql).trim().replace(/(;\s*)+$/, '');
+}
+
+/**
+ * @param {string} sql - the caller's statement
+ * @param {number} limit - maximum rows (a positive integer)
+ * @returns {string}
+ * @throws when `limit` is not a positive integer or the statement is empty
+ */
+function sqlWithLimit(sql, limit) {
+  if (!Number.isSafeInteger(limit) || limit <= 0) {
+    throw new Error(`row limit must be a positive integer, got ${String(limit)}`);
+  }
+  const statement = stripStatement(sql);
+  if (!statement) throw new Error('the query is empty');
+  return `SELECT * FROM (\n${statement}\n) AS ${ALIAS} LIMIT ${limit}`;
+}
+
+module.exports = { sqlWithLimit, parseLimit, stripStatement, ALIAS, MAX_LIMIT, DEFAULT_LIMIT };

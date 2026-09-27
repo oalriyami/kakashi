@@ -2,6 +2,8 @@
 
 const { program } = require('commander');
 const fs = require('fs');
+const { writeFileSafe, createWriteStreamSafe } = require('../src/lib/safe-write');
+const { parseLimit } = require('../src/engine/db/limit');
 const path = require('path');
 const readline = require('readline');
 const { glob } = require('glob');
@@ -289,7 +291,13 @@ async function runDbAction(conn, options, action) {
     mode: options.mode || 'typed',
     whitelist: options.whitelist ? options.whitelist.split(',').map((s) => s.trim()) : [],
   };
-  const limit = options.limit ? parseInt(options.limit, 10) : 10000;
+  let limit;
+  try {
+    limit = parseLimit(options.limit);
+  } catch (err) {
+    console.error(chalk.red(`Error: ${err.message}`));
+    process.exit(2);
+  }
 
   printHeader(`db:${dbEngine.inferDriver(conn)} — ${options.query.slice(0, 60)}${options.query.length > 60 ? '...' : ''}`, BRAND);
 
@@ -326,7 +334,16 @@ async function runDbAction(conn, options, action) {
   // action === 'mask'
   const outPath = options.output || `masked_query.${options.format || 'jsonl'}`;
   const format = options.format || 'jsonl';
-  const outStream = fs.createWriteStream(outPath);
+  // Written to a temporary file and moved into place only when complete, and
+  // never through a link planted at the output path (#33).
+  let out;
+  try {
+    out = createWriteStreamSafe(outPath);
+  } catch (err) {
+    console.error(chalk.red(`Error: ${err.message}`));
+    process.exit(2);
+  }
+  const outStream = out.stream;
   let rows = 0;
   let totalFindings = 0;
   const byCat = { id: 0, pii: 0, cred: 0 };
@@ -359,15 +376,17 @@ async function runDbAction(conn, options, action) {
     if (format === 'json') outStream.write('\n]\n');
   } catch (err) {
     console.error(chalk.red(`Error running query: ${err.message}`));
-    outStream.end();
+    out.abort();
     process.exit(2);
   }
   // Wait for the write stream to fully flush before exiting — otherwise
   // process.exit() can drop the tail of the buffered output on disk.
-  await new Promise((resolve, reject) => {
-    outStream.end(() => resolve());
-    outStream.on('error', reject);
-  });
+  try {
+    await out.finish();
+  } catch (err) {
+    console.error(chalk.red(`Error writing output: ${err.message}`));
+    process.exit(2);
+  }
 
   if (allFindings.length > 0) recordMask(allFindings);
   console.log(chalk.green(`\n[ok] Masked query results saved: ${outPath}`));
@@ -491,7 +510,12 @@ program
     }
 
     if (options.output) {
-      fs.writeFileSync(options.output, rendered);
+      try {
+        writeFileSafe(options.output, rendered);
+      } catch (err) {
+        console.error(chalk.red(`Error writing report: ${err.message}`));
+        process.exit(2);
+      }
       console.error(chalk.green(`[ok] Report written: ${options.output}`));
     } else {
       process.stdout.write(rendered);
@@ -670,7 +694,12 @@ program
     const snap = impactSnapshot();
     const json = JSON.stringify(snap, null, 2);
     if (options.write) {
-      fs.writeFileSync(options.write, json);
+      try {
+        writeFileSafe(options.write, json);
+      } catch (err) {
+        console.error(chalk.red(`Error: ${err.message}`));
+        process.exit(2);
+      }
       console.log(chalk.green(`[ok] Impact snapshot written: ${options.write}`));
       console.log(chalk.gray('   This file is safe to attach to a GitHub issue.'));
       console.log(chalk.gray('   No filenames, paths, values, or machine id are included.'));

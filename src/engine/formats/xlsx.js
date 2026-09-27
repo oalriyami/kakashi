@@ -3,6 +3,7 @@ const path = require('path');
 const XLSX = require('xlsx');
 const JSZip = require('jszip');
 const pkg = require('./package');
+const { writeFileSafe } = require('../../lib/safe-write');
 const { occurrences, replaceOccurrences } = require('./replace');
 
 /**
@@ -239,7 +240,7 @@ const BOOK_TYPES = { xlsx: 'xlsx', xlsm: 'xlsm', xlsb: 'xlsb', xls: 'biff8' };
 async function writeXlsx(filePath, outputPath, data, replMap) {
   const ext = path.extname(outputPath).slice(1).toLowerCase();
   const out = await maskXlsxBuffer(fs.readFileSync(filePath), replMap, BOOK_TYPES[ext] || 'xlsx');
-  fs.writeFileSync(outputPath, out);
+  writeFileSafe(outputPath, out);
 }
 
 module.exports = { readXlsx, writeXlsx, readXlsxBuffer, maskXlsxBuffer };

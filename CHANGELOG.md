@@ -114,6 +114,32 @@ to 3.
 
 ### Fixed
 
+- **No output is written through a symbolic link** (#33). Git stores
+  symlinks, so a repository could ship `masked_config.env -> ~/.bashrc`, and
+  `mask-dir -r` then wrote the masked copy of `config.env` into the user's
+  shell start-up file. Every writer -- `mask`, `mask-dir`, `db-mask`,
+  `scan-dir -o`, `impact --write`, agent-guard `--auto-mask` and Guardian's
+  release copy, in every format -- now goes through
+  [src/lib/safe-write.js](src/lib/safe-write.js): a destination that is a
+  symbolic link or not a regular file is refused (exit 2, or `[fail]` for
+  that file in `mask-dir`), and the data is written to a new temporary file
+  in the same folder and renamed into place, so a link planted after the
+  check is replaced rather than followed and no half-written file is ever
+  visible. A replaced file keeps its permissions.
+- **`db-scan` / `db-mask` cannot write to the database** (#34). `--limit 0`,
+  `-5` or `abc` switched off the derived-table wrap that makes a `DELETE`,
+  `UPDATE` or `DROP` a syntax error, so `db-scan "$PG" -q "DELETE FROM
+  customers" --limit abc` deleted every row and reported "0 rows, clean".
+  `--limit` now accepts only a whole number from 1 to 10,000,000 (exit 2
+  otherwise), and the library refuses an unusable limit instead of skipping
+  the cap. PostgreSQL queries run in a `READ ONLY` transaction through a
+  server-side cursor (`DECLARE … CURSOR`, which accepts only a query, sent as
+  a single prepared statement) and are fetched in batches up to the limit, so
+  a second statement, a data-modifying `WITH` or a function that writes is
+  refused by the server, and the caller's SQL is no longer rewritten. MySQL
+  queries run in a `START TRANSACTION READ ONLY` that is rolled back. The
+  wrap used by the other SQL drivers puts the statement on its own lines, so
+  a trailing `-- comment` no longer breaks it.
 - **The agent-guard API only serves local tools, inside the watched folder**
   (#32). Loopback is not a trust boundary: every web page the user opens can
   send requests to `127.0.0.1`, and so can every other process on the

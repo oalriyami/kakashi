@@ -31,7 +31,11 @@ const os = require('os');
 const path = require('path');
 
 const { streamMasked, aggregate, inferDriver } = require('../src/engine/db');
-const { sqlWithLimit } = require('../src/engine/db/limit');
+const { spawnSync } = require('child_process');
+const { sqlWithLimit, parseLimit } = require('../src/engine/db/limit');
+
+const CLI = path.join(__dirname, '..', 'bin', 'kakashi.js');
+const cli = (args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8' });
 
 const PG_URL = process.env.KAKASHI_TEST_POSTGRES_URL || '';
 
@@ -113,21 +117,82 @@ async function runDbIntegrationTests() {
   await check('sqlWithLimit wraps a statement in a capped derived table', () => {
     assert.strictEqual(
       sqlWithLimit('SELECT * FROM staff', 2),
-      'SELECT * FROM (SELECT * FROM staff) AS kakashi_limited LIMIT 2',
+      'SELECT * FROM (\nSELECT * FROM staff\n) AS kakashi_limited LIMIT 2',
     );
   });
 
-  await check('sqlWithLimit strips a trailing semicolon before wrapping', () => {
+  await check('sqlWithLimit strips trailing semicolons before wrapping', () => {
     // Without this the wrap produces `(SELECT …;) AS t`, a syntax error.
     assert.strictEqual(
-      sqlWithLimit('SELECT * FROM staff;  ', 5),
-      'SELECT * FROM (SELECT * FROM staff) AS kakashi_limited LIMIT 5',
+      sqlWithLimit('SELECT * FROM staff;;  ', 5),
+      'SELECT * FROM (\nSELECT * FROM staff\n) AS kakashi_limited LIMIT 5',
     );
   });
 
-  await check('sqlWithLimit leaves the statement alone without a usable limit', () => {
+  await check('sqlWithLimit keeps a trailing -- comment inside the wrap', () => {
+    // On one line, the comment swallowed the closing parenthesis.
+    const wrapped = sqlWithLimit('SELECT * FROM staff -- active only', 5);
+    assert.ok(wrapped.includes('-- active only\n) AS kakashi_limited'), wrapped);
+  });
+
+  // -------------------------------------------------------------------------
+  // #34: an unusable limit is an ERROR. It used to leave the statement
+  // unwrapped -- and the wrap is what stops a DELETE, UPDATE or DROP from
+  // running -- so `--limit abc` turned db-scan into a way to empty a table.
+  // -------------------------------------------------------------------------
+  await check('#34 sqlWithLimit refuses an unusable limit instead of skipping the wrap', () => {
     for (const bad of [undefined, null, 0, -1, 1.5, '10', NaN, Infinity]) {
-      assert.strictEqual(sqlWithLimit('SELECT 1', bad), 'SELECT 1', `changed for ${String(bad)}`);
+      assert.throws(() => sqlWithLimit('DELETE FROM staff', bad), /positive integer/, `accepted ${String(bad)}`);
+    }
+  });
+
+  await check('#34 parseLimit accepts only a whole number from 1 to 10,000,000', () => {
+    assert.strictEqual(parseLimit(undefined), 10000);
+    assert.strictEqual(parseLimit('25'), 25);
+    assert.strictEqual(parseLimit(' 7 '), 7);
+    assert.strictEqual(parseLimit(10000000), 10000000);
+    for (const bad of ['abc', '0', '-5', '1.5', '1e3', '0x10', '', '10000001', '07', '5 rows']) {
+      assert.throws(() => parseLimit(bad), /whole number/, `accepted ${JSON.stringify(bad)}`);
+    }
+  });
+
+  await check('#34 db-scan and db-mask exit 2 on an unusable --limit, before connecting', () => {
+    const out = path.join(os.tmpdir(), `kakashi-limit-${process.pid}.jsonl`);
+    for (const cmd of ['db-scan', 'db-mask']) {
+      for (const bad of ['abc', '0', '-5']) {
+        const r = cli([cmd, 'mock:customers', '-q', 'SELECT *', `--limit=${bad}`, ...(cmd === 'db-mask' ? ['-o', out] : [])]);
+        assert.strictEqual(r.status, 2, `${cmd} --limit ${bad} -> ${r.status}`);
+        assert.ok(/whole number/.test(r.stderr), r.stderr);
+      }
+    }
+    assert.ok(!fs.existsSync(out), 'an output was written');
+  });
+
+  await check('#34 mysql: read-only transaction, rolled back, statement wrapped', async () => {
+    if (!have('mysql2/promise')) return;
+    // No MySQL server in CI: stand in for the client and record what is sent.
+    const key = require.resolve('mysql2/promise');
+    const real = require.cache[key];
+    const sent = [];
+    require.cache[key] = { id: key, filename: key, loaded: true, exports: {
+      createConnection: async () => ({
+        query: async (sql) => { sent.push(['query', sql]); return [[]]; },
+        execute: async (sql) => { sent.push(['execute', sql]); return [[{ id: 1 }]]; },
+        end: async () => { sent.push(['end']); },
+      }),
+    } };
+    try {
+      const rows = await collect(require('../src/engine/db/mysql').query('mysql://u:p@h/db', 'SELECT id FROM t;', { limit: 3 }));
+      assert.strictEqual(rows.length, 1);
+      assert.deepStrictEqual(sent, [
+        ['query', 'START TRANSACTION READ ONLY'],
+        ['execute', 'SELECT * FROM (\nSELECT id FROM t\n) AS kakashi_limited LIMIT 3'],
+        ['query', 'ROLLBACK'],
+        ['end'],
+      ]);
+    } finally {
+      if (real) require.cache[key] = real;
+      else delete require.cache[key];
     }
   });
 
@@ -225,8 +290,49 @@ async function runDbIntegrationTests() {
         assert.ok(elapsed < 30000, `took ${elapsed}ms — cap did not reach the server`);
       });
 
+      // ---------------------------------------------------------------------
+      // #34, against a real server: nothing the query text can say gets a
+      // write past the read-only cursor.
+      // ---------------------------------------------------------------------
+      const count = async () => {
+        const k = new Client({ connectionString: PG_URL });
+        await k.connect();
+        const r = await k.query(`SELECT count(*)::int AS n FROM ${table}`);
+        await k.end();
+        return r.rows[0].n;
+      };
+      const before = await count();
+      const setup = new Client({ connectionString: PG_URL });
+      await setup.connect();
+      await setup.query(`CREATE OR REPLACE FUNCTION ${table}_wipe() RETURNS int LANGUAGE sql AS $$ DELETE FROM ${table} RETURNING 1 $$`);
+      await setup.end();
+
+      const attempts = [
+        ['a DELETE with an unusable --limit', `DELETE FROM ${table}`, ['--limit=abc']],
+        ['a DELETE with the default limit', `DELETE FROM ${table}`, []],
+        ['a second statement after a SELECT', `SELECT 1; DELETE FROM ${table}`, []],
+        ['a data-modifying WITH', `WITH d AS (DELETE FROM ${table} RETURNING *) SELECT * FROM d`, []],
+        ['a function that writes', `SELECT ${table}_wipe()`, []],
+        ['a DROP', `DROP TABLE ${table}`, []],
+      ];
+      for (const [label, sql, extra] of attempts) {
+        await check(`#34 postgres: ${label} changes nothing and exits 2`, async () => {
+          const r = cli(['db-scan', PG_URL, '-q', sql, ...extra]);
+          assert.strictEqual(r.status, 2, `exit ${r.status}: ${r.stdout}${r.stderr}`);
+          assert.strictEqual(await count(), before, 'rows changed');
+        });
+      }
+
+      await check('#34 postgres: the cap holds across fetch batches and a trailing comment works', async () => {
+        const rows = await collect(streamMasked(
+          PG_URL, 'SELECT i FROM generate_series(1, 5000) i -- every row', { limit: 2500 },
+        ));
+        assert.strictEqual(rows.length, 2500);
+      });
+
       const c = new Client({ connectionString: PG_URL });
       await c.connect();
+      await c.query(`DROP FUNCTION IF EXISTS ${table}_wipe()`);
       await c.query(`DROP TABLE IF EXISTS ${table}`);
       await c.end();
     }

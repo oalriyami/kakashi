@@ -1,6 +1,7 @@
 const fs = require('fs');
 const ooxml = require('./ooxml');
 const pkg = require('./package');
+const { writeFileSafe } = require('../../lib/safe-write');
 
 /**
  * Text of one DrawingML part. Runs concatenate with no separator, for the
@@ -25,7 +26,7 @@ async function readPptx(filePath) {
  */
 async function writePptx(filePath, outputPath, data, replMap) {
   const out = await pkg.maskPackage(fs.readFileSync(filePath), 'pptx', replMap);
-  fs.writeFileSync(outputPath, out);
+  writeFileSafe(outputPath, out);
 }
 
 module.exports = { readPptx, writePptx, extractTextFromXml };

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const ooxml = require('./ooxml');
 const pkg = require('./package');
+const { writeFileSafe } = require('../../lib/safe-write');
 
 /**
  * Text of one Word XML part.
@@ -29,7 +30,7 @@ async function readDocx(filePath) {
  */
 async function writeDocx(filePath, outputPath, data, replMap) {
   const out = await pkg.maskPackage(fs.readFileSync(filePath), 'docx', replMap);
-  fs.writeFileSync(outputPath, out);
+  writeFileSafe(outputPath, out);
 }
 
 module.exports = { readDocx, writeDocx, extractTextFromXml };

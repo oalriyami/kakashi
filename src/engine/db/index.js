@@ -17,7 +17,7 @@
  */
 
 const { maskText } = require('../masker');
-const { sqlWithLimit } = require('./limit');
+const { parseLimit } = require('./limit');
 
 const DRIVERS = {
   postgres:   () => require('./postgres'),
@@ -103,7 +103,11 @@ function loadDriver(id) {
 async function* streamMasked(conn, query, options = {}) {
   const driverId = options.driver || inferDriver(conn);
   const driver = loadDriver(driverId);
-  const { maskOpts = {}, limit = 10000 } = options;
+  const { maskOpts = {} } = options;
+  // Only a positive whole number is a limit. Anything else used to switch
+  // the cap -- and with it the SQL drivers' protection against writes -- off
+  // (#34).
+  const limit = parseLimit(options.limit);
 
   // Token state is shared across EVERY row of this result set. maskText()
   // defaults these to fresh objects per call, which for a row-by-row stream

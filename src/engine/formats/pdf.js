@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const pdfParse = require('pdf-parse');
+const { writeFileSafe } = require('../../lib/safe-write');
 
 /**
  * PDF reading (#31).
@@ -202,7 +203,7 @@ function writePdf(filePath, outputPath, maskedText, summary = {}) {
   } else {
     header = `[Kakashi: extracted and masked from ${base}. ${what.replace(/`/g, '')}${missed ? ` ${missed}` : ''}]\n\n`;
   }
-  fs.writeFileSync(outputPath, header + maskedText, 'utf8');
+  writeFileSafe(outputPath, header + maskedText, 'utf8');
   return outputPath;
 }
 

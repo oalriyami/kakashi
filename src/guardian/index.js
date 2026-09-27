@@ -23,6 +23,7 @@
  */
 
 const fs = require('fs');
+const { writeFileSafe } = require('../lib/safe-write');
 const os = require('os');
 const path = require('path');
 
@@ -261,10 +262,11 @@ async function runGuardian(opts = {}) {
       emit({ kind: 'verify', iteration, verification });
 
       if (verification.goalSatisfied) {
-        // Promote the scratch artifact to the real output path. copyFile rather
-        // than rename: scratch is in the OS temp dir and may be on another
-        // filesystem.
-        fs.copyFileSync(scratchArtifact, artifactPath);
+        // Promote the scratch artifact to the real output path. A copy rather
+        // than a rename, since scratch is in the OS temp dir and may be on
+        // another filesystem -- and a copy that never follows a link planted
+        // at the destination after paths.resolveOutput checked it (#33).
+        writeFileSafe(artifactPath, fs.readFileSync(scratchArtifact));
         return finish({
           decision: DECISIONS.ALLOW_WITH_TRANSFORMATION,
           reasonCode: 'GOAL_SATISFIED',

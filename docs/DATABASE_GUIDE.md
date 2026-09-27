@@ -31,7 +31,19 @@ your laptop                         your database
 - Rows stream one-at-a-time through `maskText()` in the same process.
 - The only artifact is a **local file** (`masked_query.csv`, `.jsonl`, or
   `.json`) you own outright.
-- The **source database is read-only** — Kakashi never issues a write.
+- The **source database is read-only** — Kakashi never issues a write, and
+  a query that tries to is refused by the database:
+  - **PostgreSQL** runs the query in a `READ ONLY` transaction through
+    `DECLARE … CURSOR`, which accepts only a `SELECT` or `VALUES`, as a
+    single prepared statement, and always rolls back.
+  - **MySQL** runs it in a `START TRANSACTION READ ONLY` that is rolled back,
+    as a single prepared statement.
+  - **SQLite** opens the file read-only.
+  - **Every SQL driver** wraps the query in a capped derived table
+    (`SELECT * FROM (…) LIMIT n`) where Postgres does not use a cursor, and
+    a `DELETE`, `UPDATE` or `DROP` cannot appear there.
+- `--limit` must be a whole number from 1 to 10,000,000 (default 10,000).
+  Anything else is an error (exit 2) before Kakashi connects.
 
 ---
 

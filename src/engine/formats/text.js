@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { writeFileSafe } = require('../../lib/safe-write');
 const path = require('path');
 
 const CODE_EXTS = new Set([
@@ -167,7 +168,7 @@ function readText(filePath) {
  */
 function writeText(filePath, maskedText, enc) {
   const known = enc && enc.encoding ? { encoding: enc.encoding, bom: Boolean(enc.bom) } : undefined;
-  fs.writeFileSync(filePath, encodeText(maskedText, known));
+  writeFileSafe(filePath, encodeText(maskedText, known));
 }
 
 module.exports = {
