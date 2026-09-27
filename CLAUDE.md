@@ -159,7 +159,8 @@ source file to "explain" the decision.
 
 - `scan`, `db-scan`, and `scan-dir` return exit `1` when findings exist;
   this is a **detection result**, not a crash. Exit `0` is clean; exit
-  `2` is an error.
+  `2` is an error. `scan-dir` and `mask-dir` also exit `2` when any file
+  could not be read — the report lists them, and the folder is NOT clean.
 - Do NOT use `scan --verbose`, `db-scan --verbose`, `audit`, `db-audit`,
   or `scan-dir --include-values` in an agent-visible turn unless the
   user explicitly opted in knowing plaintext will land in the

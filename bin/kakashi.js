@@ -48,6 +48,21 @@ function finishWith(code) {
 }
 
 /**
+ * Do two paths name the same file? Compared by device and inode, so a
+ * relative path, a symbolic link or a hard link to the input all count.
+ * A path that does not exist yet is never the same file.
+ */
+function sameFile(a, b) {
+  try {
+    const x = fs.statSync(a);
+    const y = fs.statSync(b);
+    return x.dev === y.dev && x.ino === y.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Say so when part of a file could not be read (an embedded OLE object, an
  * ActiveX control, a macro project, a scanned PDF page). A finding count
  * covers only what was read, so "0 findings" must not be taken as "clean".
@@ -131,11 +146,25 @@ async function processFile(filePath, options, action) {
   // mask
   const outputPath = options.output || formats.defaultOutputPath(filePath);
 
-  if (options.overwrite && outputPath === filePath) {
-    const confirmed = await confirmOverwrite(filePath);
-    if (!confirmed) {
-      console.log(chalk.yellow('Aborted.'));
-      process.exit(0);
+  // Originals are never overwritten unless that is asked for (#35). `-o` naming
+  // the input -- by any path, link or case -- used to replace it silently.
+  if (sameFile(outputPath, filePath)) {
+    if (!options.overwrite) {
+      console.error(chalk.red(`Error: the output is the input file (${filePath}). Pass --overwrite to replace the original.`));
+      process.exit(2);
+    }
+    if (!options.yes) {
+      // Without a terminal the prompt used to read end-of-input, mask nothing
+      // and exit 0 -- an agent saw success. Unattended, --yes is the answer.
+      if (!process.stdin.isTTY) {
+        console.error(chalk.red('Error: --overwrite asks for confirmation; pass --yes when running without a terminal.'));
+        process.exit(2);
+      }
+      const confirmed = await confirmOverwrite(filePath);
+      if (!confirmed) {
+        console.error(chalk.yellow('Aborted: nothing was written.'));
+        process.exit(2);
+      }
     }
   }
 
@@ -206,7 +235,8 @@ program
   .option('-o, --output <path>', 'Output path')
   .option('-m, --mode <mode>', 'typed|redact|fake', 'typed')
   .option('-w, --whitelist <vals>', 'Comma-separated values to skip')
-  .option('--overwrite', 'Overwrite original file')
+  .option('--overwrite', 'Overwrite original file (asks first; --yes to skip the question)')
+  .option('-y, --yes', 'With --overwrite: replace the original without asking')
   .option('--stdin', 'Read from stdin, write to stdout')
   .action(async (file, options) => {
     if (options.overwrite && !options.output && file) {
@@ -252,6 +282,7 @@ program
     console.log(chalk.cyan(`\n${BRAND} -- batch mask`));
     console.log(chalk.gray(`   ${files.length} file(s) in ${directory}\n`));
     let totalFindings = 0;
+    let failures = 0;
     // One token map for the whole run, as db-mask shares one across rows: the
     // same value gets the same token in every file, and different values never
     // share one. Per-file maps made `[EMAIL_1]` a different person in each file.
@@ -269,11 +300,22 @@ program
         recordMask(findings);
         totalFindings += findings.length;
         console.log(chalk.green(`  [ok] ${path.basename(file)} -> ${path.basename(outputPath)} (${findings.length})`));
+        if (data.unscanned && data.unscanned.length) {
+          console.log(chalk.yellow(`       not checked in ${path.basename(file)}: ${data.unscanned.join(', ')}`));
+        }
       } catch (err) {
+        failures++;
         console.log(chalk.red(`  [fail] ${path.basename(file)}: ${err.message}`));
       }
     }
-    console.log(chalk.white(`\n   Done. ${totalFindings} total replacement(s).\n`));
+    console.log(chalk.white(`\n   Done. ${totalFindings} total replacement(s).`));
+    if (failures > 0) {
+      // A failed file was not masked. Exit 0 here used to read as "folder
+      // done" to any caller that checks the exit code (#36).
+      console.log(chalk.red(`   ${failures} file(s) failed and were NOT masked; see [fail] above.\n`));
+      process.exit(2);
+    }
+    console.log('');
     process.exit(0);
   });
 
@@ -333,6 +375,13 @@ async function runDbAction(conn, options, action) {
 
   // action === 'mask'
   const outPath = options.output || `masked_query.${options.format || 'jsonl'}`;
+  // A SQLite database is a file, and `-o` naming it replaced the database
+  // with masked JSONL (#35).
+  const sourceFile = String(conn).replace(/^(sqlite3?|file):(\/\/)?/i, '');
+  if (sameFile(outPath, sourceFile)) {
+    console.error(chalk.red('Error: the output is the database file being read. Choose another -o path.'));
+    process.exit(2);
+  }
   const format = options.format || 'jsonl';
   // Written to a temporary file and moved into place only when complete, and
   // never through a link planted at the output path (#33).
@@ -449,7 +498,13 @@ program
   .option('--include-values', 'JSON only: embed the matched plaintext in the report (NOT agent-safe — writes every detected secret into the output)')
   .action(async (directory, options) => {
     const extraIgnore = options.exclude ? options.exclude.split(',').map((s) => s.trim()) : [];
-    const concurrency = parseInt(options.parallel, 10) || 8;
+    // `--parallel -1` used to start no workers, scan nothing and report the
+    // folder clean.
+    const concurrency = /^[1-9]\d*$/.test(String(options.parallel).trim()) ? Number(options.parallel) : NaN;
+    if (!Number.isSafeInteger(concurrency) || concurrency > 256) {
+      console.error(chalk.red(`Error: --parallel must be a whole number from 1 to 256, got "${options.parallel}"`));
+      process.exit(2);
+    }
 
     console.error(chalk.cyan(`\n${BRAND} — scan-dir`));
     console.error(chalk.gray(`   Root: ${directory}`));
@@ -484,6 +539,15 @@ program
         + ' — re-run with --no-gitignore to include them.',
       ));
     }
+    if (report.failedFiles > 0) {
+      console.error(chalk.red(`   Could not be read: ${report.failedFiles} file(s) — the report is incomplete and lists them.`));
+    }
+    if (report.partiallyCheckedFiles > 0) {
+      console.error(chalk.yellow(`   Partly checked: ${report.partiallyCheckedFiles} file(s) hold content that could not be read.`));
+    }
+    if (report.notScanned && report.notScanned.total > 0) {
+      console.error(chalk.gray(`   Other files: ${report.notScanned.total} in formats Kakashi does not read.`));
+    }
     console.error('');
 
     let rendered;
@@ -510,6 +574,11 @@ program
     }
 
     if (options.output) {
+      // Never write the report over a file that was just scanned (#35).
+      if (report.files.some((f) => sameFile(options.output, path.join(directory, f.path)))) {
+        console.error(chalk.red(`Error: ${options.output} is one of the scanned files. Choose another -o path.`));
+        process.exit(2);
+      }
       try {
         writeFileSafe(options.output, rendered);
       } catch (err) {
@@ -520,6 +589,9 @@ program
     } else {
       process.stdout.write(rendered);
     }
+    // 2 when files could not be read: the report is incomplete, and neither
+    // "clean" (0) nor "findings" (1) would be true (#36).
+    if (report.failedFiles > 0) return finishWith(2);
     return finishWith(s.total > 0 ? 1 : 0);
   });
 

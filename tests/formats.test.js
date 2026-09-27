@@ -131,8 +131,9 @@ async function runFormatsTests() {
 
   await check('globPatterns also matches extensionless names', () => {
     const pats = formats.globPatterns(true);
-    assert(Array.isArray(pats) && pats.length === 2, 'expected an extension and a filename pattern');
+    assert(Array.isArray(pats) && pats.length === 3, 'expected extension, filename and tfstate.backup patterns');
     assert(pats.some((p) => p.includes('dockerfile')), 'Dockerfile/Makefile pattern missing');
+    assert(pats.some((p) => p.endsWith('*.tfstate.backup')), 'terraform.tfstate.backup pattern missing');
   });
 
   // ---------------------------------------------------------------------------

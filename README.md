@@ -781,7 +781,8 @@ Global flags
   --mode typed|redact|fake      Replacement style (default: typed)
   --whitelist val1,val2         Values to never mask
   --output path                 Output path
-  --overwrite                   Replace the original (asks for confirmation)
+  --overwrite                   Replace the original (asks first; refused without a terminal)
+  -y, --yes                     With --overwrite: replace without asking
   --stdin                       Read from stdin, write to stdout
   --lang en|ar                  CLI language (default: $LANG / $KAKASHI_LANG)
   -v, --verbose                 Per-finding previews on scan (NOT agent-safe)

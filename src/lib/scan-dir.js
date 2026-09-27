@@ -126,6 +126,9 @@ async function scanDirectory(rootPath, options = {}) {
       fileResults.push({
         path: path.relative(rootPath, filePath),
         findings, // raw findings — enrichment happens once at the end
+        // Parts of the file that could not be read (an OLE object, a scanned
+        // PDF page): the file's count covers only the rest.
+        ...(data.unscanned && data.unscanned.length ? { unscanned: data.unscanned } : {}),
       });
     } catch (err) {
       fileResults.push({
@@ -152,8 +155,23 @@ async function scanDirectory(rootPath, options = {}) {
       path: f.path,
       findings: slice,
       ...(f.errors ? { errors: f.errors } : {}),
+      ...(f.unscanned ? { unscanned: f.unscanned } : {}),
     };
-  });
+  }).sort((a, b) => a.path.localeCompare(b.path));
+
+  // Everything else in the tree -- images, archives, binaries, formats the
+  // engine does not read. Not a failure, but a report must say it did not
+  // look at them rather than let "0 findings" suggest it did (#36).
+  const everything = await glob('**/*', { ...globOpts, ignore });
+  const seen = new Set(allFiles);
+  const byExtension = {};
+  let otherFiles = 0;
+  for (const f of everything) {
+    if (seen.has(f)) continue;
+    otherFiles++;
+    const ext = path.extname(f).toLowerCase() || '(none)';
+    byExtension[ext] = (byExtension[ext] || 0) + 1;
+  }
 
   return {
     rootPath,
@@ -162,6 +180,15 @@ async function scanDirectory(rootPath, options = {}) {
     files: enrichedFiles,
     summary,
     skippedByIgnoreFile,
+    // Files that could not be read at all. A report with any of these is
+    // incomplete, and the CLI exits 2.
+    failedFiles: enrichedFiles.filter((f) => f.errors).length,
+    // Files read only in part.
+    partiallyCheckedFiles: enrichedFiles.filter((f) => f.unscanned).length,
+    notScanned: {
+      total: otherFiles,
+      byExtension: Object.fromEntries(Object.entries(byExtension).sort((a, b) => b[1] - a[1]).slice(0, 10)),
+    },
   };
 }
 

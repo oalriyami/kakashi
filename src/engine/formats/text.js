@@ -20,11 +20,21 @@ const CODE_EXTS = new Set([
   'dockerfile', 'makefile', 'vagrantfile', 'procfile',
   'gitignore', 'gitconfig', 'editorconfig',
   'lock', 'gradle', 'maven',
+  // Key and credential files (#36). A folder scan used to skip every one of
+  // them as "unsupported" and report the folder clean: private keys, npm and
+  // netrc tokens, Postgres passwords, git credentials, Terraform state (which
+  // holds every secret a plan touched in plain text).
+  'pem', 'key', 'p8', 'ppk', 'crt', 'cer', 'tfstate',
+  'npmrc', 'yarnrc', 'pypirc', 'netrc', 'pgpass', 'htpasswd', 'dockercfg', 's3cfg', 'boto',
+  'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'credentials', 'git-credentials', '_netrc',
 ]);
 
 const SPECIAL_FILENAMES = new Set([
   'dockerfile', 'makefile', 'vagrantfile', 'procfile',
   'gitignore', 'gitconfig', 'editorconfig',
+  // Credential files with no extension: SSH private keys, the AWS CLI's
+  // `~/.aws/credentials`, Windows' `_netrc`.
+  'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'credentials', '_netrc',
 ]);
 
 /**
@@ -39,6 +49,8 @@ const SPECIAL_FILENAMES = new Set([
 function getExt(filePath) {
   const base = path.basename(filePath).toLowerCase();
   if (SPECIAL_FILENAMES.has(base)) return base;
+  // Terraform keeps the previous state beside the current one.
+  if (base.endsWith('.tfstate.backup')) return 'tfstate';
 
   if (base.startsWith('.')) {
     const stripped = base.slice(1);               // '.env' -> 'env'
@@ -129,7 +141,16 @@ function decodeText(buf, enc = detectEncoding(buf)) {
   if (encoding === 'utf-32') {
     throw new Error('UTF-32 text is not supported; save the file as UTF-8 or UTF-16 and try again');
   }
-  if (encoding === 'utf-8') return { text: buf.toString('utf8'), encoding, bom: false };
+  if (encoding === 'utf-8') {
+    // Text has no NUL bytes; UTF-16 was recognised above. A NUL here means a
+    // binary file -- a DER key, an image renamed .txt, a database file. Read as
+    // text it was scanned as noise and "masked" into a corrupted copy while
+    // being reported [ok] (#36), so it is refused and reported as not read.
+    if (buf.subarray(0, 8192).includes(0)) {
+      throw new Error('the file is binary (it contains NUL bytes), so it was not read as text');
+    }
+    return { text: buf.toString('utf8'), encoding, bom: false };
+  }
 
   let body = bom ? buf.subarray(2) : buf;
   if (body.length % 2 !== 0) {

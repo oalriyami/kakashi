@@ -569,7 +569,8 @@ Global flags:
   --lang <code>               en | ar
   --mode typed|redact|fake    Replacement style (default: typed)
   --whitelist val1,val2       Values to never mask
-  --overwrite                 Replace original (asks confirmation)
+  --overwrite                 Replace the original (asks first; refused without a terminal)
+  -y, --yes                   With --overwrite: replace without asking
   --stdin                     Read from stdin
   -v, --verbose               Per-finding previews (NOT agent-safe)
 

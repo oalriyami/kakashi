@@ -114,6 +114,28 @@ to 3.
 
 ### Fixed
 
+- **Originals are not overwritten unless asked** (#35). `mask app.env -o
+  app.env` replaced the original without a word, `db-mask x.db -o x.db`
+  replaced a SQLite database with JSONL, and `mask --overwrite` without a
+  terminal printed its question, read end-of-input, masked nothing and exited
+  0 -- so an agent saw success. An output that is the input (by any path,
+  symbolic link or hard link) is now refused unless `--overwrite` is given;
+  `--overwrite` without a terminal needs the new `--yes`; declining the
+  question exits 2 with nothing written. `db-mask` refuses to write over the
+  SQLite file it reads, and `scan-dir -o` over a file it scanned.
+- **Folder scans never call unread files clean** (#36). `scan-dir` counted a
+  file it could not read as clean and exited 0, and `mask-dir` printed
+  `[fail]` and exited 0. Key and credential files were skipped as
+  "unsupported" -- `id_rsa` and other SSH keys, `*.pem`, `*.key`, `.npmrc`,
+  `.netrc`, `.pgpass`, `.git-credentials`, `~/.aws/credentials`,
+  `terraform.tfstate` and its `.backup` -- and are now read as text. Binary
+  files (NUL bytes outside UTF-16) are refused instead of being scanned and
+  "masked" as noise. Every report format (JSON, Markdown, HTML in English and
+  Arabic) lists the files that could not be read, the files read only in part
+  (embedded objects, scanned PDF pages) and how many other files were in
+  formats Kakashi does not read; `scan-dir` and `mask-dir` exit 2 when any
+  file could not be read. `--parallel` must be a positive whole number
+  (`--parallel -1` scanned nothing and reported the folder clean).
 - **No output is written through a symbolic link** (#33). Git stores
   symlinks, so a repository could ship `masked_config.env -> ~/.bashrc`, and
   `mask-dir -r` then wrote the masked copy of `config.env` into the user's

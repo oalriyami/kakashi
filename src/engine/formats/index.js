@@ -162,6 +162,9 @@ function globPatterns(recursive = false, exts = SUPPORTED_EXTS, includeFilenames
   const patterns = [extGlob(exts, prefix)];
   if (includeFilenames) {
     patterns.push(`${prefix}{${SUPPORTED_FILENAMES.join(',')}}`);
+    // Terraform's previous state, `terraform.tfstate.backup`: same secrets,
+    // but an extension of its own.
+    patterns.push(`${prefix}*.tfstate.backup`);
   }
   return patterns;
 }
