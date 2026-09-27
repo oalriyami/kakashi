@@ -111,6 +111,12 @@ const BENCH_NEGATIVES = [
   'شكرا لكم على التعاون',
   'تمت الموافقة على الطلب',
   'يرجى التواصل مع خدمة العملاء',
+  // #39: dictionary words that are also names, a road named after a person,
+  // and Arabic words that folding made look like names.
+  'the quick brown fox jumps over the lazy dog',
+  'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG',
+  'The office is on Sheikh Zayed Road in Dubai.',
+  'وصل وفد رفيع المستوى إلى المدينة',
 ];
 
 /**
@@ -122,6 +128,7 @@ const BENCH_NEGATIVES = [
  *   phase 2:  the name list (#12) -- 112/112 on those contexts, 176/176 with
  *             the 4 list-based contexts added, and 0 of 43 negatives flagged
  *             (the 27 before plus 16 new ones).
+ *   #39:      4 more negatives (0 of 47 flagged), recall unchanged.
  */
 const RECALL_FLOOR = 176;
 const FALSE_ALARM_CEILING = 0;
@@ -350,7 +357,42 @@ async function runNameTests() {
     ['greetings without a name', 'Hi team, thanks all. Dear Customer, hello world.', []],
     ['hyphenated heading', 'Real-World Validation of Cross-Border Transfers', []],
     ['product catalogue under a weak key', 'name,price\nwireless mouse,25\nusb cable,5\ncoffee maker,40', []],
+    // #39
+    ['dictionary words are not a lower-case name without a cue', 'the quick brown fox; rose and daisy grow here', []],
+    ['... but are with one', 'please ask grace hopper to review', ['grace hopper']],
+    ['a "TO:" label is a cue', 'BILL TO: GRACE HOPPER', ['GRACE HOPPER']],
+    ['a word glued to digits is a code, not a name', 'IBAN JO94CBJO0010000000000131000302', []],
+    ['a road named after a sheikh is a road', 'The office is on Sheikh Zayed Road.', []],
+    ['nisba tested on the unfolded word', 'وصل وفد رفيع المستوى إلى المدينة', []],
   ];
+  await check('#39 a country is not a repeat of a first name', () => {
+    assert.deepStrictEqual(names('Jordan Carter will fly to Jordan next week.'), ['Jordan Carter']);
+    // A person's first name alone still is.
+    assert.deepStrictEqual(names('Maria Santos joined. Maria leads.'), ['Maria Santos', 'Maria']);
+  });
+
+  await check('#39 a repeat keeps the confidence of the name it repeats', () => {
+    const f = maskText('Sarah Connor joined in 2019. Today Sarah leads.', { patterns: NAME_PATTERNS }).findings;
+    const full = f.find((x) => x.original === 'Sarah Connor');
+    const rep = f.find((x) => x.original === 'Sarah');
+    assert(full && rep, JSON.stringify(f));
+    assert.strictEqual(rep.confidence, full.confidence);
+  });
+
+  await check('#39 عليه is not a name, even though it folds onto علية', () => {
+    assert(!names('قال يوسف عليه السلام').some((n) => n.includes('عليه')));
+  });
+
+  await check('#39 a name never takes the text of another finding', () => {
+    const r = maskText('IBAN JO94CBJO0010000000000131000302 please pay');
+    assert.deepStrictEqual(r.findings.map((x) => [x.id, x.original]), [['iban', 'JO94CBJO0010000000000131000302']]);
+  });
+
+  await check('#39 names that are dictionary words are flagged as everyday', () => {
+    for (const w of ['brown', 'fox', 'grace', 'Rose']) assert(nameList.isEverydayWord(w), w);
+    for (const w of ['sarah', 'rajesh', 'Kumar', 'priya']) assert(!nameList.isEverydayWord(w), w);
+  });
+
   for (const [desc, text, want] of PHASE2_CASES) {
     await check(`phase 2: ${desc}`, () => {
       const got = names(text);

@@ -5,7 +5,8 @@
  *
  *   node scripts/build-name-list.js            fetch the sources with `npm pack`
  *   node scripts/build-name-list.js --from DIR use sources already unpacked in
- *                                              DIR/wikidata-names and DIR/subtlex
+ *                                              DIR/wikidata-names, DIR/subtlex and
+ *                                              DIR/wordlist-english
  *
  * Sources, both fetched from the npm registry at build time and never at run
  * time:
@@ -15,6 +16,9 @@
  *                                   film and TV subtitles (SUBTLEX-US), ISC.
  *                                   Each word is listed in its dominant case,
  *                                   which is what makes it useful here.
+ *   wordlist-english@1.2.1          SCOWL English word lists by frequency
+ *                                   level (Kevin Atkinson; permissive, see
+ *                                   src/engine/data/README.md).
  *
  * Output, all keys normalised by names.js:
  *   given      Latin and Arabic-script given names, one word each
@@ -24,6 +28,11 @@
  *              `hope`, `price`, `the` -- Vietnamese `Thế` once accents go).
  *              `Mark`, `Grace` and `Bill` are capitalised more often than not,
  *              so they stay unambiguous.
+ *   everyday   names that are also ordinary English words at SCOWL level 35
+ *              or below -- the size of a standard spelling dictionary -- in
+ *              whatever case they are usually written (`brown`, `fox`, `rose`,
+ *              `grace`). A lower-case or ALL-CAPS run made only of these is
+ *              not taken for a name without a cue (#39).
  *
  * Other scripts are left out: the detectors that read this list handle Latin
  * and Arabic text.
@@ -39,7 +48,9 @@ const { normalizeLatin, normalizeArabic, WIKIDATA_FILE } = require('../src/engin
 const SOURCES = {
   'wikidata-names': 'wikidata-names@1.0.0',
   subtlex: 'subtlex-word-frequencies@2.0.0',
+  'wordlist-english': 'wordlist-english@1.2.1',
 };
+const SCOWL_LEVELS = ['10', '20', '35'];
 const MIN_COMMON_COUNT = 10;
 
 const LATIN_WORD = /^[\p{Script=Latin}\p{M}'’-]+$/u;
@@ -94,11 +105,20 @@ function main() {
     .map((e) => normalizeLatin(e.word)));
   const ambiguous = [...new Set([...given, ...family])].filter((k) => common.has(k));
 
+  const scowl = new Set();
+  for (const level of SCOWL_LEVELS) {
+    const words = JSON.parse(fs.readFileSync(path.join(dir, 'wordlist-english', `english-words-${level}.json`), 'utf8'));
+    for (const w of words) if (/^[a-z]+$/.test(w)) scowl.add(normalizeLatin(w));
+  }
+  const everyday = [...new Set([...given, ...family])].filter((k) => scowl.has(k));
+
   const data = {
-    source: 'wikidata-names@1.0.0 (Wikidata, CC0); ambiguity from subtlex-word-frequencies@2.0.0 (ISC)',
+    source: 'wikidata-names@1.0.0 (Wikidata, CC0); ambiguity from subtlex-word-frequencies@2.0.0 (ISC);'
+      + ' everyday words from wordlist-english@1.2.1 (SCOWL)',
     given: [...given].sort(),
     family: [...family].sort(),
     ambiguous: ambiguous.sort(),
+    everyday: everyday.sort(),
   };
   const json = JSON.stringify(data);
   const br = zlib.brotliCompressSync(Buffer.from(json), {
@@ -107,7 +127,8 @@ function main() {
   fs.mkdirSync(path.dirname(WIKIDATA_FILE), { recursive: true });
   fs.writeFileSync(WIKIDATA_FILE, br);
   console.log(`Wrote ${path.relative(process.cwd(), WIKIDATA_FILE)}: ${data.given.length} given, `
-    + `${data.family.length} family, ${data.ambiguous.length} ambiguous; ${Math.round(br.length / 1024)} KB`);
+    + `${data.family.length} family, ${data.ambiguous.length} ambiguous, ${data.everyday.length} everyday; `
+    + `${Math.round(br.length / 1024)} KB`);
 }
 
 main();

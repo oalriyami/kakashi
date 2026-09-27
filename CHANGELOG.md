@@ -114,6 +114,58 @@ to 3.
 
 ### Fixed
 
+- **Passwords in URLs and many common secret keys are masked** (#40). The
+  QA pass's realistic `.env` had 14 of 36 secrets left in the clear and 2
+  masked in part; now 35 are masked whole and only a six-digit `ADMIN_PIN`
+  remains. The changes:
+  - `url_password` (new): the password in `scheme://user:password@host` for
+    any scheme -- smtp, ftp, https, git -- replacing only the password.
+    `smtp://mailer:MailPass!22@…` used to leave `MailPass!` and label the rest
+    an EMAIL; the email pattern now ignores a URL's `user:password@`.
+  - `db_conn` takes `+driver` schemes (`postgresql+psycopg2://`,
+    `mysql+pymysql://`) and amqp(s), rediss, mariadb, clickhouse,
+    cockroachdb, cassandra, neo4j, snowflake and db2, and no longer runs into
+    a closing backtick.
+  - `session_cookie` (new): session and credential cookie values on `Cookie:`
+    and `Set-Cookie:` lines; `theme=dark` stays.
+  - `env_secret` keys: `PASS`, `AUTH`, `SALT`, `PSK` and `SESSION` as the
+    last segment (`DB_PASS`, `_auth`, `WIFI_PSK`), any `*_KEY`
+    (`ENCRYPTION_KEY`, `APP_KEY`), `PASSPHRASE`, `MNEMONIC`, `SEED_PHRASE` and
+    `CONN_STR` / `CONNECTION_STRING`. Keys naming an identifier or a public
+    half (`API_KEY_ID`, `PUBLIC_KEY`) or a database or UI key (`PRIMARY_KEY`,
+    `SITE_KEY`, `data-key`) do not count, and a key whose only claim is weak
+    (`auth`, `session`, `*_KEY`, a lone `pass`) needs a value that looks
+    generated: `auth=(user, pw)`, `session = await …` and "first pass: copy"
+    are code and prose.
+  - `env_secret` places: after `?`, `&`, `:` and `]` (`?password=…`,
+    `.npmrc`'s `:_authToken=`), in PHP `define('DB_PASSWORD', '…')`, in
+    Kubernetes / Compose `- name: … value: …` and ECS `{"name", "value"}`
+    pairs, after `curl -u user:` / `wget --user=user:`, and in a CSV, TSV,
+    Markdown or spreadsheet column headed `password`, `api_key`, `secret` …
+  - At the start of a line a bare value runs to whitespace, so
+    `password: Xk9#mQ2;vL,7(pZ)]` is masked whole instead of `Xk9`; a
+    trailing ` # comment` stays. In a URL query a value stops at `&`.
+  - `Authorization: Token …` is a `bearer` credential.
+  - Documentation placeholders (`user:password@`, `'value'`) and
+    punctuation-only values are not secrets. On an exact tie `env_secret`
+    yields to the pattern that recognised the value itself.
+- **Name detection no longer masks everyday words, IBANs and places**
+  (#39). Regressions from #1:
+  - Lower-case and ALL-CAPS names made only of dictionary words need a cue
+    (`ask`, `to`, `BILL TO:`, a name label): `the quick brown fox` is no
+    longer a person, `please ask grace hopper` still is. The name data gains
+    an `everyday` list -- the 2,053 listed names that are also SCOWL
+    level-35 English words -- built by `npm run names:build`.
+  - A word glued to digits is not a word, and a name never takes text from
+    another finding: `IBAN JO94CBJO…` used to become `[FULL_NAME_1]94CBJO…`
+    and leak the account number.
+  - A lone repeated word that is a country or city is not a repeat of a first
+    name (`Jordan Carter … fly to Jordan`), and a repeat keeps the confidence
+    of the full name it came from.
+  - After a title, the title and the next word join the place veto:
+    `Sheikh Zayed Road` is a road.
+  - Arabic: the nisba test reads the unfolded word, so `المستوى` is no longer a
+    family name, and `عليه` / `عليها` are ordinary words, not the name `علية`.
 - **agent-guard survives bad requests** (#37). A client that disconnected
   mid-body killed the daemon (an unhandled rejection), a body of any size was
   buffered whole (400 MB was accepted), `/mask` on a named pipe hung the

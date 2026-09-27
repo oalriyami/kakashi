@@ -97,6 +97,8 @@ const PATTERN_TO_CLASS = {
   azure_storage_key: 'CREDENTIAL',
   aws_secret:       'CREDENTIAL',
   db_conn:          'CREDENTIAL',
+  url_password:     'CREDENTIAL',
+  session_cookie:   'CREDENTIAL',
   sql_password:     'CREDENTIAL',
   databricks_token: 'CREDENTIAL',
   env_secret:       'CREDENTIAL',

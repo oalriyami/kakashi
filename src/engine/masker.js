@@ -2,6 +2,9 @@ const { PATTERNS } = require('./patterns');
 const { fakeValue } = require('./fakes');
 const { meetsConfidence } = require('./name-spans');
 
+/** Patterns that find people's names. */
+const NAME_IDS = new Set(['full_name', 'non_latin_name']);
+
 function lineAtOffset(text, offset) {
   let line = 1;
   for (let i = 0; i < offset && i < text.length; i++) {
@@ -143,9 +146,34 @@ function maskText(text, options = {}) {
     }
   }
 
+  // A name is the least certain thing this masker finds, so it never takes
+  // text from another finding: a name span that started on `IBAN JO…` used to
+  // win the overlap and leave the account number in the clear (#39).
+  const others = matches.filter((m) => !NAME_IDS.has(m.id)).sort((a, b) => a.start - b.start);
+  let maxEnd = -1;
+  const reach = others.map((m) => (maxEnd = Math.max(maxEnd, m.end)));
+  const overlapsOther = (m) => {
+    let lo = 0;
+    let hi = others.length - 1;
+    let last = -1; // last other finding starting before m ends
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (others[mid].start < m.end) { last = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return last >= 0 && reach[last] > m.start;
+  };
+  for (let i = matches.length - 1; i >= 0; i--) {
+    if (NAME_IDS.has(matches[i].id) && overlapsOther(matches[i])) matches.splice(i, 1);
+  }
+
+  // Earliest start wins, then the longest span. On an exact tie the generic
+  // `KEY=value` catch-all yields to a pattern that recognised the value itself:
+  // `X-Auth: 5d41…` is a hex secret, `API_KEY=sk-…` an OpenAI key.
   matches.sort((a, b) => {
     if (a.start !== b.start) return a.start - b.start;
-    return b.end - b.start - (a.end - a.start);
+    const len = b.end - b.start - (a.end - a.start);
+    if (len !== 0) return len;
+    return (a.id === 'env_secret') - (b.id === 'env_secret');
   });
 
   const resolved = [];

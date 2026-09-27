@@ -435,6 +435,53 @@ function runPatternTests() {
       ['x+447946095812', 'phone', null],
       ['offset +1234567', 'phone', null], // too short
       ['+971501234567', 'phone', null], // left to intl_phone
+      // issue #40: passwords in URLs and the secret keys that were missed
+      [`DATABASE_URL=postgresql+psycopg2://app:${j('Sup3r', 'S3cret')}@db:5432/app`, 'db_conn', `postgresql+psycopg2://app:${j('Sup3r', 'S3cret')}@db:5432/app`],
+      [`BROKER=amqp://guest:${j('Gu3st', 'Pw0rd')}@rabbitmq:5672/`, 'db_conn', `amqp://guest:${j('Gu3st', 'Pw0rd')}@rabbitmq:5672/`],
+      [`CACHE=rediss://:${j('R3dis', 'Pw0rd')}@cache:6380/0`, 'db_conn', `rediss://:${j('R3dis', 'Pw0rd')}@cache:6380/0`],
+      [`MAIL_URL=smtp://mailer:${j('MailPass', '!22')}@smtp.example.com:587`, 'url_password', j('MailPass', '!22')],
+      [`ftp://deploy:${j('Ftp', 'S3cret9')}@files.example.net/in`, 'url_password', j('Ftp', 'S3cret9')],
+      [`smtp://mailer:${j('Pass', '22')}@smtp.example.com`, 'email', null], // the password is not an address
+      ['https://user:password@host.example.com/', 'url_password', null], // a documentation example
+      ['git clone https://ci:${GIT_TOKEN}@github.com/org/repo', 'url_password', null],
+      [`DB_PASS=${j('hunter2', 'prod99')}`, 'env_secret', j('hunter2', 'prod99')],
+      [`ENCRYPTION_KEY=${j('q8Zr2LmN', '4vX7pT1s')}`, 'env_secret', j('q8Zr2LmN', '4vX7pT1s')],
+      [`APP_KEY=base64:${b64('laravel-app-key-0123456789abcd')}`, 'env_secret', `base64:${b64('laravel-app-key-0123456789abcd')}`],
+      [`PASSWORD_SALT=${j('mZ8qL2', 'xV9nB4')}`, 'env_secret', j('mZ8qL2', 'xV9nB4')],
+      [`WIFI_PSK=${j('c0ffee', 'Shop99')}`, 'env_secret', j('c0ffee', 'Shop99')],
+      [`GET /login?user=bob&password=${j('Qw3rty', 'Pass1')} HTTP/1.1`, 'env_secret', j('Qw3rty', 'Pass1')],
+      [`https://x/cb?token=${j('abc123', 'def456')}&redirect=/home`, 'env_secret', j('abc123', 'def456')],
+      [`//registry.npmjs.org/:_authToken=${j('abcDEF123456', 'ghiJKL7890')}`, 'env_secret', j('abcDEF123456', 'ghiJKL7890')],
+      [`define('DB_PASSWORD', '${j('Ph4p', 'S3cret!')}');`, 'env_secret', j('Ph4p', 'S3cret!')],
+      [`- name: DB_PASSWORD\n  value: "${j('K8s', 'S3cretVal')}"`, 'env_secret', j('K8s', 'S3cretVal')],
+      [`{"name": "DB_PASSWORD", "value": "${j('Ecs', 'Pass123')}"}`, 'env_secret', j('Ecs', 'Pass123')],
+      [`user,password,role\nalice,${j('Al1ce', 'P4ss!')},admin`, 'env_secret', j('Al1ce', 'P4ss!')],
+      [`| user | api_key |\n|---|---|\n| bob | ${j('k3y', 'Val99x')} |`, 'env_secret', j('k3y', 'Val99x')],
+      [`password: ${j('Xk9#mQ2;', 'vL,7(pZ)]')}`, 'env_secret', j('Xk9#mQ2;', 'vL,7(pZ)]')],
+      [`PASSWORD=${j('abc123', 'xyz')} # rotate monthly`, 'env_secret', j('abc123', 'xyz')],
+      [`curl -u admin:${j('Curl3d', 'Passw0rd')} https://api.example.com`, 'env_secret', j('Curl3d', 'Passw0rd')],
+      ['curl -u user:password https://api.example.com', 'env_secret', null], // a documentation example
+      [`Cookie: sessionid=${j('8f3k2l1m0n', '9b8v7c6x5z')}; theme=dark`, 'session_cookie', j('8f3k2l1m0n', '9b8v7c6x5z')],
+      [`Set-Cookie: sid=${j('abc123', 'def456ghi7')}; Path=/; HttpOnly`, 'session_cookie', j('abc123', 'def456ghi7')],
+      ['Cookie: theme=dark; lang=en', 'session_cookie', null],
+      [`Authorization: Token ${j('9f8e7d6c5b4a', '3928AbCdEf')}`, 'bearer', j('9f8e7d6c5b4a', '3928AbCdEf')],
+      // ... and what must stay unmasked
+      ['API_KEY_ID=12345', 'env_secret', null],
+      ['PUBLIC_KEY_PATH=/etc/keys/pub.pem', 'env_secret', null],
+      ['SESSION_TIMEOUT=30', 'env_secret', null],
+      ['PASSPORT_NO=A1234567', 'env_secret', null],
+      ['AUTHOR=jane', 'env_secret', null],
+      ['AUTH_PROVIDER=google', 'env_secret', null],
+      ['SESSION_DRIVER=redis', 'env_secret', null],
+      ['PRIMARY_KEY=id', 'env_secret', null],
+      ['RECAPTCHA_SITE_KEY=6LcXyzAbCdEf1234', 'env_secret', null],
+      ['<div data-key="row-5">', 'env_secret', null],
+      ["  ssh_key: 'CREDENTIAL',", 'env_secret', null],
+      ['const session = await client.openSession();', 'env_secret', null],
+      ['requests.post(url, auth=(user, password))', 'env_secret', null],
+      ['// first pass: copy the runs', 'env_secret', null],
+      ['new Client({ connectionString: conn })', 'env_secret', null],
+      ["p('?password=', 'x')", 'env_secret', null],
     ];
     for (const [text, id, want] of formatCases) {
       const got = want === null
@@ -502,6 +549,8 @@ function runPatternTests() {
     sql_password: 'fake is the value only; the pattern needs its SQL context',
     azure_storage_key: 'fake is the value only; the pattern needs its AccountKey= context',
     aws_secret: 'a bare 40-character key needs a key id or label nearby to count',
+    url_password: 'fake is the password only; the pattern needs its scheme://user:…@host',
+    session_cookie: 'fake is the cookie value only; the pattern needs its Cookie: line',
   };
   for (const p of PATTERNS) {
     if (!p.fakeValues || FAKE_EXEMPT[p.id]) { passed++; continue; }

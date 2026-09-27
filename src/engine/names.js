@@ -10,7 +10,9 @@
  * Two sources, merged at load time:
  *   data/names-wikidata.json.br  given and family names from Wikidata (CC0),
  *                                built by scripts/build-name-list.js, plus the
- *                                names that are also everyday English words
+ *                                names that are also everyday English words:
+ *                                `ambiguous` (usually written in lower case)
+ *                                and `everyday` (in a standard dictionary)
  *   data/names-supplement.json   a hand-kept regional supplement: Gulf, South
  *                                Asian and Filipino names Wikidata lacks,
  *                                spelling variants, and Arabic names that are
@@ -104,6 +106,7 @@ function load() {
     given: new Set(),
     family: new Set(),
     ambiguous: new Set(),
+    everyday: new Set(),
   };
   const add = (set, words, familyForm) => {
     for (const w of words || []) {
@@ -123,6 +126,7 @@ function load() {
     add(sets.given, json.given, false);
     add(sets.family, json.family, true);
     add(sets.ambiguous, json.ambiguous, false);
+    add(sets.everyday, json.everyday, false);
     // The supplement can also clear a word Wikidata lists as a name.
     for (const w of json.notNames || []) {
       const k = nameKey(w);
@@ -164,10 +168,21 @@ function isAmbiguousName(word) {
   return Boolean(k) && load().ambiguous.has(k);
 }
 
+/**
+ * Is `word` a name that is also in a standard English dictionary (`brown`,
+ * `fox`, `grace`), however it is usually capitalised? Wider than
+ * isAmbiguousName: `Grace` is mostly a name, but `grace` is still a word, so
+ * `grace hopper` in lower case needs a cue to count (#39).
+ */
+function isEverydayWord(word) {
+  const k = nameKey(word);
+  return Boolean(k) && load().everyday.has(k);
+}
+
 /** Counts, for tests and `list-patterns`-style diagnostics. */
 function stats() {
-  const { given, family, ambiguous } = load();
-  return { given: given.size, family: family.size, ambiguous: ambiguous.size };
+  const { given, family, ambiguous, everyday } = load();
+  return { given: given.size, family: family.size, ambiguous: ambiguous.size, everyday: everyday.size };
 }
 
 module.exports = {
@@ -180,6 +195,7 @@ module.exports = {
   isFamilyName,
   isKnownName,
   isAmbiguousName,
+  isEverydayWord,
   stats,
   WIKIDATA_FILE,
   SUPPLEMENT_FILE,

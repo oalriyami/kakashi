@@ -312,7 +312,7 @@ function collectLabelLines(text, push) {
  * spreadsheet reader's ` | `-joined rows. A block is a run of non-empty lines;
  * its first line is the header when most rows have the same field count.
  */
-function collectTables(text, push) {
+function collectTables(text, push, isColumn = classifyKey) {
   const lines = [];
   let off = 0;
   for (const l of text.split('\n')) {
@@ -324,14 +324,14 @@ function collectTables(text, push) {
     if (!lines[i].text.trim()) { i++; continue; }
     let j = i;
     while (j < lines.length && lines[j].text.trim()) j++;
-    if (j - i >= 2) scanBlock(lines.slice(i, j), push);
+    if (j - i >= 2) scanBlock(lines.slice(i, j), push, isColumn);
     i = j;
   }
 }
 
 const DELIMITERS = ['\t', '|', ',', ';'];
 
-function scanBlock(block, push) {
+function scanBlock(block, push, isColumn) {
   for (const d of DELIMITERS) {
     if (!block[0].text.includes(d)) continue;
     // Markdown rows carry outer pipes that are not fields. Decided once per
@@ -346,11 +346,11 @@ function scanBlock(block, push) {
     const aligned = parsed.filter((p) => p.fields.length === header.length);
     if (aligned.length / parsed.length < 0.6) continue;
 
-    const personCols = header
-      .map((h, idx) => (classifyKey(h.value) ? idx : -1))
+    const wanted = header
+      .map((h, idx) => (isColumn(h.value) ? idx : -1))
       .filter((idx) => idx >= 0);
     for (const p of aligned) {
-      for (const idx of personCols) {
+      for (const idx of wanted) {
         const f = p.fields[idx];
         push(header[idx].value, p.line.start + f.start, f.value);
       }
@@ -391,4 +391,4 @@ function splitFields(line, d, markdown = false) {
   return fields;
 }
 
-module.exports = { createPersonFieldDetector, classifyKey, normalizeKey, splitFields };
+module.exports = { createPersonFieldDetector, classifyKey, normalizeKey, splitFields, collectTables };

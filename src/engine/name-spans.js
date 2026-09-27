@@ -24,7 +24,7 @@
  */
 
 const {
-  isGivenName, isFamilyName, isAmbiguousName, normalizeArabic,
+  isGivenName, isFamilyName, isAmbiguousName, isEverydayWord, normalizeArabic,
 } = require('./names');
 
 /**
@@ -69,8 +69,33 @@ const AR_HEAD_PARTICLES = new Set(['عبد', 'أبو', 'ابو', 'أم', 'ام']
 /** Heads that also start places (أبو ظبي, أم القيوين): alone, not a name. */
 const AR_PLACE_HEADS = new Set(['أبو', 'ابو', 'أم', 'ام'].map(normalizeArabic));
 const AR_FAMILY_PARTICLES = new Set(['آل'].map(normalizeArabic));
-/** `ال…ي`: the nisba form most Gulf family names take (الكعبي, المنصوري). */
+/**
+ * `ال…ي`: the nisba form most Gulf family names take (الكعبي, المنصوري).
+ * Tested on the unfolded word: folding ى into ي made المستوى ("the level")
+ * and every other `ال…ى` word look like one (#39).
+ */
 const AR_NISBA_RX = /^ال[؀-ۿ]{2,}ي$/;
+
+/**
+ * Words just before a lower-case or ALL-CAPS name that say a person follows:
+ * `please ask grace hopper`, `reassigned to priya nair`, `PAY TO RAJESH KUMAR`.
+ */
+const CASELESS_CUE_RX = /(?:^|[^\p{L}])(?:ask|asked|tell|told|contact|call|called|email|emailed|ping|cc|meet|met|with|from|to|by|for|thanks|thank you|assigned|reassigned|user|agent|driver|dear|hi|hello|attn)[ \t]{0,8}[:,]?[ \t]{1,8}$/iu;
+
+/**
+ * Places and countries that are also names, which a lone repeated word must
+ * not be taken for: `Jordan Carter … will fly to Jordan` (#39).
+ */
+const LONE_PLACE_NAMES = new Set([
+  'jordan', 'chad', 'georgia', 'india', 'kenya', 'israel', 'oman', 'qatar', 'egypt', 'sudan',
+  'lebanon', 'syria', 'iraq', 'iran', 'yemen', 'libya', 'morocco', 'tunisia', 'algeria',
+  'kuwait', 'bahrain', 'pakistan', 'nepal', 'china', 'japan', 'korea', 'france', 'spain',
+  'italy', 'germany', 'brazil', 'peru', 'chile', 'cuba', 'mali', 'niger', 'jamaica',
+  'dubai', 'sharjah', 'ajman', 'fujairah', 'riyadh', 'jeddah', 'doha', 'muscat', 'amman',
+  'cairo', 'beirut', 'paris', 'london', 'sydney', 'victoria', 'florence', 'austin',
+  'dallas', 'houston', 'denver', 'phoenix', 'orlando', 'madison', 'lincoln', 'charlotte',
+  'chelsea', 'aurora', 'savannah', 'sofia', 'valencia', 'medina', 'makkah', 'mecca',
+]);
 
 const RANK = { low: 0, medium: 1, high: 2 };
 
@@ -82,8 +107,11 @@ const RANK = { low: 0, medium: 1, high: 2 };
  * @param {RegExp} deps.nameCueRx - a cue that a name follows, anchored at the end
  * @param {RegExp} deps.titleCaseRx - the `full_name` regex (global)
  * @param {function(string,string,number):boolean} deps.titleCaseValidate
+ * @param {function(string,string,number):string} [deps.titleCaseConfidence]
  */
-function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, titleCaseRx, titleCaseValidate }) {
+function createNameSpanDetectors({
+  commonEn, commonAr, isOrgOrPlace, nameCueRx, titleCaseRx, titleCaseValidate, titleCaseConfidence = null,
+}) {
   // Stop-words are compared WITHOUT the letter folding names get: folding ى
   // into ي would make the preposition على ("on") the name علي (Ali).
   const lightAr = (w) => w.replace(/[\u064B-\u065F\u0670\u0640]/g, '');
@@ -95,6 +123,10 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
     && (isGivenName(w) || (family && isFamilyName(w)));
 
   const cueBefore = (text, idx) => nameCueRx.test(text.slice(Math.max(0, idx - 24), idx));
+  const caselessCueBefore = (text, idx) => cueBefore(text, idx)
+    || CASELESS_CUE_RX.test(text.slice(Math.max(0, idx - 24), idx));
+  /** A word glued to a digit is part of a code, not a word: `JO94CBJO…` (#39). */
+  const gluedToDigit = (text, start, end) => /\d/.test(text[start - 1] || '') || /\d/.test(text[end] || '');
 
   // -------------------------------------------------------------------------
   // Arabic
@@ -117,7 +149,7 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
   const arName = (t, { ambiguous = true } = {}) => !arCommon(t)
     && (isGivenName(t.raw) || isFamilyName(t.raw)) && (ambiguous || !isAmbiguousName(t.raw));
   const arGivenStrong = (t) => !arCommon(t) && isGivenName(t.raw) && !isAmbiguousName(t.raw);
-  const arNisba = (t) => AR_NISBA_RX.test(t.norm) && !arCommon(t);
+  const arNisba = (t) => AR_NISBA_RX.test(t.light || lightAr(t.raw)) && !arCommon(t);
 
   /** Tokens [i, n) of `run` that continue a name, or 0. */
   function arUnit(run, i) {
@@ -186,6 +218,7 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
     LATIN_WORD_RX.lastIndex = 0;
     let m;
     while ((m = LATIN_WORD_RX.exec(text)) !== null) {
+      if (gluedToDigit(text, m.index, m.index + m[0].length)) { run = null; continue; }
       const w = { raw: m[0].replace(/['’-]+$/, ''), start: m.index };
       w.end = w.start + w.raw.length;
       if (run && /^[ \t]+$/.test(text.slice(run[run.length - 1].end, w.start))) run.push(w);
@@ -205,7 +238,7 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
     while (words.length < max) {
       rx.lastIndex = pos;
       const m = rx.exec(text);
-      if (!m) break;
+      if (!m || gluedToDigit(text, m.index, m.index + m[0].length)) break;
       const raw = m[0].replace(/['’-]+$/, '');
       words.push({ raw, start: pos - at, end: pos - at + raw.length });
       // As in latinWords, the gap is measured from the end of the word with
@@ -253,8 +286,12 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
         if (wc === 'title' || !isGivenName(w.raw) || !strongLatin(w.raw, { family: false })) { i++; continue; }
         const j = extendLatin(run, i, wc);
         const toks = run.slice(i, j);
-        const nameCount = toks.filter((t) => !LATIN_PARTICLES.has(t.raw.toLowerCase())).length;
-        if (nameCount >= 2 && !isOrgOrPlace(toks.map((t) => t.raw))) {
+        const nameToks = toks.filter((t) => !LATIN_PARTICLES.has(t.raw.toLowerCase()));
+        // Names that are all dictionary words need a cue: `the quick brown
+        // fox` is not a person, `please ask grace hopper` is (#39).
+        const everyday = nameToks.every((t) => isEverydayWord(t.raw));
+        if (nameToks.length >= 2 && !(everyday && !caselessCueBefore(text, toks[0].start))
+          && !isOrgOrPlace(toks.map((t) => t.raw))) {
           spans.push({ start: toks[0].start, end: toks[toks.length - 1].end, original: text.slice(toks[0].start, toks[toks.length - 1].end), confidence: 'medium' });
           i = j;
         } else {
@@ -289,6 +326,10 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
       const end = at + run[j - 1].end;
       const toks = run.slice(0, j).map((t) => t.raw);
       if (isOrgOrPlace(toks)) continue;
+      // The title and the word after the name belong to the veto too:
+      // `Sheikh Zayed Road` is a road, not Mr Zayed (#39).
+      const title = text.slice(m.index, m.index + m[1].length);
+      if (run[j] && isOrgOrPlace([title, ...toks, run[j].raw])) continue;
       spans.push({ start, end, original: text.slice(start, end), confidence: 'medium' });
     }
     return spans;
@@ -300,7 +341,9 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
     const out = [];
     let m;
     while ((m = rx.exec(text)) !== null) {
-      if (titleCaseValidate(m[0], text, m.index)) out.push({ start: m.index, end: m.index + m[0].length, original: m[0] });
+      if (!titleCaseValidate(m[0], text, m.index)) continue;
+      const confidence = titleCaseConfidence ? titleCaseConfidence(m[0], text, m.index) : 'low';
+      out.push({ start: m.index, end: m.index + m[0].length, original: m[0], confidence });
     }
     return out;
   }
@@ -310,7 +353,13 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
    * text: `Maria Santos joined in 2019. Maria leads the audit.`
    */
   function repeats(text, found, script) {
-    const parts = new Set();
+    // Each part keeps the confidence of the strongest full name it came from:
+    // a repeat is no surer than its source (#39).
+    const parts = new Map();
+    const add = (part, confidence = 'medium') => {
+      const had = parts.get(part);
+      if (!had || RANK[confidence] > RANK[had]) parts.set(part, confidence);
+    };
     for (const s of found) {
       const words = s.original.split(/[ \t]+/).filter(Boolean);
       if (words.length < 2) continue;
@@ -318,10 +367,12 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
       const last = words[words.length - 1];
       if (script === 'arabic') {
         const t = { raw: first, norm: normalizeArabic(first), light: lightAr(first) };
-        if (arGivenStrong(t) && first.length >= 3) parts.add(first);
+        if (arGivenStrong(t) && first.length >= 3) add(first, s.confidence);
       } else {
-        if (first.length >= 3 && isGivenName(first) && strongLatin(first)) parts.add(first);
-        if (last.length >= 3 && isFamilyName(last) && strongLatin(last)) parts.add(last);
+        // A lone repeated word that is also a place stays a place.
+        const place = (w) => LONE_PLACE_NAMES.has(w.toLowerCase()) || isOrgOrPlace([w]);
+        if (first.length >= 3 && isGivenName(first) && strongLatin(first) && !place(first)) add(first, s.confidence);
+        if (last.length >= 3 && isFamilyName(last) && strongLatin(last) && !place(last)) add(last, s.confidence);
       }
     }
     const letter = script === 'arabic' ? AR_LETTERS : '\\p{L}\\p{M}';
@@ -357,7 +408,7 @@ function createNameSpanDetectors({ commonEn, commonAr, isOrgOrPlace, nameCueRx, 
       // the full name already covers it (and a whitelisted full name must
       // not leak its first word).
       if (covered(start, end)) continue;
-      spans.push({ start, end, original: m[0], confidence: 'medium' });
+      spans.push({ start, end, original: m[0], confidence: parts.get(m[0]) });
     }
     return spans;
   }

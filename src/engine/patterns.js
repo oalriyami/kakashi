@@ -1,4 +1,4 @@
-const { createPersonFieldDetector } = require('./person-fields');
+const { createPersonFieldDetector, collectTables } = require('./person-fields');
 const { createNameSpanDetectors } = require('./name-spans');
 const { isKnownName, isAmbiguousName, isGivenName } = require('./names');
 
@@ -113,7 +113,9 @@ const COMMON_EN = new Set([
  * this tool's own output is written in.
  */
 const COMMON_AR = new Set([
-  // Function words and particles
+  // Function words and particles. عليه ("upon him") folds onto the name علية,
+  // so it is listed here, where words are compared unfolded (#39).
+  'عليه', 'عليها', 'عليهم', 'عليهما', 'عليك', 'عليكم',
   'من', 'في', 'على', 'إلى', 'الى', 'عن', 'مع', 'هذا', 'هذه', 'ذلك', 'تلك',
   'التي', 'الذي', 'الذين', 'كل', 'بعض', 'غير', 'قد', 'لا', 'ما', 'أو', 'او',
   'ثم', 'لكن', 'أن', 'ان', 'إن', 'كان', 'كانت', 'يكون', 'تكون', 'تم', 'يتم',
@@ -302,11 +304,61 @@ function looksLikeName(tokens, common, text, idx) {
 // Secret assignments (env_secret) and hash references (hex_secret)
 // ---------------------------------------------------------------------------
 
-/** A key that names a secret: `DB_PASSWORD`, `client_secret`, `ApiKey`. No capture groups. */
+/** Words that make a key a secret wherever they sit in it: `DB_PASSWORD`, `client_secret`. */
+const SECRET_WORDS = 'PASSWORD|PASSWD|PWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|SECRET[_-]?KEY'
+  + '|CREDENTIAL|HOST|BUCKET|SIGNATURE|HMAC|DSN|WEBHOOK|PASSPHRASE|MNEMONIC|SEED[_-]?PHRASE'
+  + '|CONN(?:ECTION)?[_-]?STR(?:ING)?';
+/**
+ * Words that make a key a secret only as its last segment (#40): `DB_PASS`,
+ * `_auth`, `PASSWORD_SALT`, `WIFI_PSK`, `SESSION`. Anywhere else they are too
+ * common -- `PASSPORT_NO`, `AUTHOR`, `AUTH_PROVIDER`, `SESSION_DRIVER`.
+ */
+const SECRET_LAST_WORDS = 'PASS|AUTH|SALT|PSK|SESSION';
+
+/**
+ * A key that names a secret. No capture groups.
+ *
+ * Three shapes: a secret word anywhere (`DB_PASSWORD`, `ApiKey`), a last-word
+ * one ending the key at a segment boundary (`SMTP_PASS`), and any `*_KEY`
+ * (`ENCRYPTION_KEY`, `APP_KEY`, `signing.key`) -- those whose segment before
+ * `KEY` names a property, not a secret (`PRIMARY_KEY`, `SITE_KEY`), are dropped
+ * in validation.
+ */
 // The name around the keyword is bounded (real keys are well under 100
 // characters). Unbounded, `[\w.-]*` on both sides made every start in a long
 // `a-a-a-…` run scan the rest of the run for a keyword: quadratic (#38).
-const SECRET_KEY = '(?:[A-Za-z_][\\w.-]{0,100})?(?:PASSWORD|PASSWD|PWD|SECRET|TOKEN|API[_-]?KEY|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|SECRET[_-]?KEY|CREDENTIAL|HOST|BUCKET|SIGNATURE|HMAC|DSN|WEBHOOK)[\\w.-]{0,100}';
+const SECRET_KEY = '(?:'
+  + `(?:[A-Za-z_][\\w.-]{0,100})?(?:${SECRET_WORDS})[\\w.-]{0,100}`
+  + `|(?:[A-Za-z_][\\w.-]{0,100})?(?<![A-Za-z0-9])(?:${SECRET_LAST_WORDS})(?![\\w.-])`
+  + '|[A-Za-z_][\\w.-]{0,100}[_.-]KEY(?![\\w.-])'
+  + ')';
+/** The whole string is a secret key: a header cell, a `define()` name. */
+const SECRET_KEY_ONLY_RX = new RegExp(`^${SECRET_KEY}$`, 'i');
+const SECRET_WORD_RX = new RegExp(`${SECRET_WORDS}|(?<![A-Za-z0-9])(?:${SECRET_LAST_WORDS})(?![A-Za-z0-9])`, 'i');
+const STRONG_SECRET_WORD_RX = new RegExp(SECRET_WORDS, 'i');
+const CONN_STR_KEY_RX = /CONN(?:ECTION)?[_-]?STR(?:ING)?/i;
+
+/**
+ * A key whose only claim to a secret is weak: it ends in `AUTH`, `SESSION` or
+ * `KEY`, or it is one of the last words alone (`pass`, `salt`). Such keys are
+ * also everyday code and prose -- `auth=(user, pw)`, `session = await …`,
+ * `ssh_key: 'CREDENTIAL'`, "first pass: copy" -- so their value must look
+ * generated before it counts.
+ */
+function isWeakSecretKey(key) {
+  if (STRONG_SECRET_WORD_RX.test(key)) return false;
+  const segments = key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return segments.length < 2 || ['auth', 'session', 'key'].includes(segments[segments.length - 1]);
+}
+
+/** Eight or more characters, no spaces, and a digit, a symbol or mixed case. */
+function looksGenerated(value) {
+  return value.length >= 8 && !/\s/.test(value)
+    && (/\d/.test(value) || /[^A-Za-z0-9]/.test(value) || (/[a-z]/.test(value) && /[A-Z]/.test(value.slice(1))));
+}
+
+/** Words that stand in for a password in documentation: `https://user:password@host`. */
+const EXAMPLE_PASSWORD_RX = /^(?:password|passwd|pass|pwd|pw|secret|pass(?:word)?\d|p@ssw(?:or)?d)$/i;
 
 /**
  * Split an env_secret match into its key and value, for each of its forms:
@@ -349,6 +401,21 @@ const SECRET_PROPERTY_SEGMENTS = new Set([
   'expiration', 'ttl', 'timeout', 'lifetime', 'age', 'count', 'limit', 'limits',
   'size', 'port', 'policy', 'rotation', 'strength', 'regex', 'pattern', 'hint',
   'header', 'prefix', 'enabled', 'required', 'file', 'path', 'dir', 'name', 'version',
+  // An identifier or a public half is not the secret (#40): `API_KEY_ID`,
+  // `PUBLIC_KEY`, `STRIPE_PUB_KEY`.
+  'id', 'ids', 'public', 'pub',
+]);
+
+/**
+ * The segment before a bare `*_KEY` that makes it a database, cache or UI key
+ * rather than a secret: `PRIMARY_KEY`, `sort_key`, `RECAPTCHA_SITE_KEY`,
+ * `data-key`, `idempotency_key`.
+ */
+const NOT_SECRET_KEY_SEGMENTS = new Set([
+  'primary', 'foreign', 'partition', 'sort', 'range', 'hash', 'composite', 'unique',
+  'index', 'cache', 'site', 'data', 'hot', 'shortcut', 'lookup', 'idempotency',
+  'dedup', 'dedupe', 'routing', 'row', 'map', 'translation', 'i18n', 'object',
+  'item', 'record', 'group', 'sequence', 'event', 'react', 'list', 'redis', 's3',
 ]);
 
 /** @param {string} key */
@@ -358,14 +425,157 @@ function describesSecretProperty(key) {
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
-  return segments.some((seg) => SECRET_PROPERTY_SEGMENTS.has(seg));
+  if (segments.some((seg) => SECRET_PROPERTY_SEGMENTS.has(seg))) return true;
+  // A key that is a secret only because it ends in KEY.
+  if (segments[segments.length - 1] === 'key' && !SECRET_WORD_RX.test(key)) {
+    return NOT_SECRET_KEY_SEGMENTS.has(segments[segments.length - 2]);
+  }
+  return false;
 }
 
 /** Values that stand in for a secret: references, templates, truncations. */
-const SECRET_PLACEHOLDER_RX = /^(?:\$\{|\$\(|\{\{|%\(|<[^>]*>?$|\$[A-Za-z_]\w*$|process\.env\b|os\.environ\b|env\(|x{3,}$|\*{3,}$)|\.\.\.|…|^(?:change[_-]?me|replace[_-]?me|your[_-]\S*|todo|redacted|placeholder|dummy)$/i;
+const SECRET_PLACEHOLDER_RX = /^(?:\$\{|\$\(|\{\{|%\(|<[^>]*>?$|\$[A-Za-z_]\w*$|process\.env\b|os\.environ\b|env\(|x{3,}$|\*{3,}$)|\.\.\.|…|^(?:change[_-]?me|replace[_-]?me|your[_-]\S*|todo|redacted|placeholder|dummy|value)$/i;
+
+/**
+ * Whether `value`, found under the secret key `key`, is a secret rather than a
+ * reference, a placeholder, a masked token or a JSON structure.
+ * @param {string} key
+ * @param {string} value
+ * @param {boolean} [keyQuoted]
+ * @param {boolean} [valueQuoted]
+ */
+function isSecretValue(key, value, keyQuoted = false, valueQuoted = false) {
+  if (/^(?:[\w.-]*_)?TOKENIZ(?:E|ER|ERS|ATION)$/i.test(key)) return false;
+  if (!value) return false;
+  // Punctuation alone is syntax (`', '`), and a leading `(` a call or a tuple:
+  // `auth=(user, password)`, `ssh_key: (n) => …`.
+  if (!/[\p{L}\p{N}]/u.test(value) || value.startsWith('(')) return false;
+  if (isWeakSecretKey(key) && !looksGenerated(value)) return false;
+  // `connectionString: conn` names a variable; a connection string has `=`, `;`, `:` or `@`.
+  if (CONN_STR_KEY_RX.test(key) && !/[=;:@/]/.test(value)) return false;
+  // JSON has no bare strings, so a bare value after a quoted key is code:
+  // `{"X-Signature": HMAC_SECRET}` references a variable, it is not one.
+  if (keyQuoted && !valueQuoted) return false;
+  // Never re-detect a token this masker already emitted. Now that only the
+  // VALUE is replaced, `API_KEY=[OPENAI_KEY_1]` still looks like KEY=value
+  // -- so without this, masking stopped being idempotent and the Guardian's
+  // verifier could never converge (it re-scans its own output and would
+  // escalate forever, ending in BLOCK).
+  if (/^\[[A-Z0-9_]*\]?$/.test(value)) return false;
+  // JSON makes these common: `"password": null`, `"token": {` (an object).
+  if (/^(?:null|undefined|none|nil|true|false)$/i.test(value)) return false;
+  if (/^[{[]/.test(value)) return false;
+  // A key that describes a property of a secret, not the secret itself:
+  // `max_tokens: 1024`, `token_type: bearer`, `PASSWORD_MIN_LENGTH=12`.
+  if (describesSecretProperty(key)) return false;
+  // A reference or placeholder, not a value: `${DB_PASSWORD}`, `$TOKEN`,
+  // `{{ secrets.KEY }}`, `%(password)s`, `<your-key>`, `sk-proj-...`.
+  if (SECRET_PLACEHOLDER_RX.test(value)) return false;
+  // A loopback host is not infrastructure worth hiding.
+  if (/host/i.test(key) && LOCAL_HOST_RX.test(value)) return false;
+  return true;
+}
 
 /** Loopback and local-only hosts. */
 const LOCAL_HOST_RX = /^(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[::1\]|host\.docker\.internal)(?::\d+)?$/i;
+
+/** Text just before an `@` that makes it a URL's `user:password@`, not an email. */
+const URL_USERINFO_BEFORE_RX = /[a-z][\w+.-]*:\/\/[^\s\/@]*$/i;
+
+// Secret assignments that are not `KEY=value` (#40). Each captures the key in
+// group 1 and the value in the first later group that matched.
+const SECRET_FORM_RXS = [
+  // PHP: define('DB_PASSWORD', 'value');
+  new RegExp(`\\bdefine\\([ \\t]{0,8}["'](${SECRET_KEY})["'][ \\t]{0,8},[ \\t]{0,8}(?:"([^"\\n]{1,256})"|'([^'\\n]{1,256})')`, 'gid'),
+  // Kubernetes, Compose and CI environment lists:
+  //   - name: DB_PASSWORD
+  //     value: "…"
+  new RegExp(`\\bname:[ \\t]{0,8}["']?(${SECRET_KEY})["']?[ \\t]{0,8}\\r?\\n[ \\t]{0,40}(?:-[ \\t]{1,8})?value:[ \\t]{0,8}(?:"([^"\\n]{1,256})"|'([^'\\n]{1,256})'|([^\\s"'#][^\\s#]{0,255}))`, 'gid'),
+  // ECS task definitions and other JSON: {"name": "DB_PASSWORD", "value": "…"}
+  new RegExp(`"name"[ \\t]{0,8}:[ \\t]{0,8}"(${SECRET_KEY})"[ \\t]{0,8},\\s{0,40}"value"[ \\t]{0,8}:[ \\t]{0,8}"([^"\\n]{1,256})"`, 'gid'),
+];
+
+/** `curl -u user:password`, `wget --user=user:password`: the password. */
+const CLI_USER_PASSWORD_RX = /\b(?:curl|wget|http)\b[^\n]{0,500}?[ \t](?:-u|--user)(?:[ \t]{1,8}|=)["']?[^\s:"'`]{1,128}:([^\s"'`]{1,256})/gd;
+
+/** A table column that holds secrets: `password`, `api_key`, `Client Secret` is not (spaces). */
+function isSecretColumn(header) {
+  const h = header.trim().replace(/^["'`]|["'`]$/g, '');
+  return SECRET_KEY_ONLY_RX.test(h) && !describesSecretProperty(h);
+}
+
+/**
+ * Secret values env_secret's regex cannot see: `define()`, name/value pairs,
+ * `curl -u`, and the cells of a `password` or `api_key` column in a CSV, TSV,
+ * Markdown table or spreadsheet (#40).
+ * @param {string} text
+ * @returns {Array<{start:number,end:number,original:string}>}
+ */
+function detectSecretForms(text) {
+  const spans = [];
+  for (const rx of SECRET_FORM_RXS) {
+    rx.lastIndex = 0;
+    let m;
+    while ((m = rx.exec(text)) !== null) {
+      const g = [2, 3, 4].find((i) => m[i] !== undefined);
+      if (g === undefined || !isSecretValue(m[1], m[g].trim(), false, g !== 4)) continue;
+      spans.push({ start: m.indices[g][0], end: m.indices[g][1], original: m[g] });
+    }
+  }
+  CLI_USER_PASSWORD_RX.lastIndex = 0;
+  let c;
+  while ((c = CLI_USER_PASSWORD_RX.exec(text)) !== null) {
+    if (!isSecretValue('password', c[1]) || EXAMPLE_PASSWORD_RX.test(c[1])) continue;
+    spans.push({ start: c.indices[1][0], end: c.indices[1][1], original: c[1] });
+  }
+  collectTables(text, (key, offset, raw) => {
+    const lead = raw.length - raw.trimStart().length;
+    const value = raw.trim();
+    if (!isSecretValue(key, value)) return;
+    spans.push({ start: offset + lead, end: offset + lead + value.length, original: value });
+  }, isSecretColumn);
+  return spans;
+}
+
+/** Cookie names that carry a session or a credential. */
+const SESSION_COOKIE_NAME_RX = /sess|sid|token|auth|jwt|remember|login|secret|key|csrf|xsrf|credential/i;
+const COOKIE_HEADER_RX = /\b(Set-Cookie|Cookie)[ \t]{0,8}:[ \t]{0,8}([^\n\r"'`]{1,4096})/gi;
+
+/**
+ * Values of session and credential cookies on `Cookie:` and `Set-Cookie:`
+ * lines (#40). Only the first pair of a Set-Cookie is the cookie; the rest are
+ * attributes (`Path`, `Expires`). A cookie without a telling name counts when
+ * its value is long and mixes letters and digits, as session ids do.
+ */
+function detectSessionCookies(text) {
+  const spans = [];
+  COOKIE_HEADER_RX.lastIndex = 0;
+  let m;
+  while ((m = COOKIE_HEADER_RX.exec(text)) !== null) {
+    const body = m[2];
+    let at = m.index + m[0].length - body.length;
+    const pairs = body.split(';');
+    for (const pair of /^set-/i.test(m[1]) ? pairs.slice(0, 1) : pairs) {
+      const eq = pair.indexOf('=');
+      if (eq > 0) {
+        const name = pair.slice(0, eq).trim();
+        const raw = pair.slice(eq + 1);
+        // Cookie values never hold whitespace (RFC 6265).
+        let value = raw.trim().split(/\s/)[0];
+        let start = at + eq + 1 + (raw.length - raw.trimStart().length);
+        if (/^".*"$/.test(value)) { value = value.slice(1, -1); start++; }
+        const named = SESSION_COOKIE_NAME_RX.test(name);
+        const opaque = value.length >= 16 && /\d/.test(value) && /[A-Za-z]/.test(value);
+        const masked = /^\[[A-Z0-9_]*\]?$/.test(value) || SECRET_PLACEHOLDER_RX.test(value);
+        if (((named && value.length >= 8) || opaque) && !masked) {
+          spans.push({ start, end: start + value.length, original: value });
+        }
+      }
+      at += pair.length + 1;
+    }
+  }
+  return spans;
+}
 
 /** Words that, just before a hex string on the same line, say it is a hash. */
 const HASH_CUE_RX = /\b(?:commits?|sha-?(?:1|256|384|512)?(?:sum)?|checksums?|digests?|integrity|hash(?:es)?|revision|rev|merged?|cherry[- ]?pick(?:ed)?|blob|tree|parent|fix(?:es|ed)?|refs?|tags?|objects?)\b[^\n]{0,24}$/i;
@@ -725,6 +935,7 @@ const nameSpans = createNameSpanDetectors({
   nameCueRx: NAME_CUE_RX,
   titleCaseRx: FULL_NAME_RX,
   titleCaseValidate: fullNameTitleCase,
+  titleCaseConfidence: fullNameConfidence,
 });
 
 const BASE_PATTERNS = [
@@ -868,7 +1079,11 @@ const BASE_PATTERNS = [
     rx: /\b[\w.+-]{1,64}@[\w.-]{1,253}\.[a-zA-Z]{2,63}\b/g,
     // `logo@2x.png` is a file name. Only extensions that are not also real
     // top-level domains are rejected (`.md`, `.zip`, `.mov` are TLDs).
-    validate: (match) => !FILE_EXTENSION_TLD_RX.test(match),
+    // Nor is the `user:password@host` of a URL an address (#40): with
+    // `smtp://mailer:Pass22@smtp.example.com` the email used to win the
+    // overlap and relabel the password.
+    validate: (match, text, idx) => !FILE_EXTENSION_TLD_RX.test(match)
+      && !URL_USERINFO_BEFORE_RX.test(text.slice(Math.max(0, idx - 300), idx)),
     fakeValues: ['user_a@example.com', 'user_b@example.org'],
   },
   {
@@ -1137,7 +1352,10 @@ const BASE_PATTERNS = [
     label: 'Bearer Token',
     labelAr: 'رمز Bearer',
     cat: 'cred',
-    rx: /\bBearer[ \t]+[A-Za-z0-9._\-+/=]{20,}\b/gi,
+    // Also `Authorization: Token <value>` (Django REST, GitHub), where only the
+    // value is replaced (#40).
+    rx: /\b(Bearer[ \t]+[A-Za-z0-9._\-+/=]{20,})\b|\bAuthorization["']?[ \t]{0,8}[:=][ \t]{0,8}["']?Token[ \t]{1,8}([A-Za-z0-9._\-+/=]{16,})/gi,
+    valueGroups: [1, 2],
     fakeValues: ['Bearer abc123def456ghi789jkl012mno345'],
   },
   {
@@ -1158,8 +1376,36 @@ const BASE_PATTERNS = [
     cat: 'cred',
     // Standard:  postgresql://user:pass@host/db
     // JDBC:      jdbc:databricks://host:443/path  (sub-protocol after jdbc:)
-    rx: /\b(?:postgresql|postgres|mysql|mongodb(?:\+srv)?|redis|mssql|sqlite|oracle):\/\/[^\s"'<>]+|\bjdbc:[a-z]+:\/\/[^\s"'<>]+|\bjdbc:\/\/[^\s"'<>]+/gi,
+    // SQLAlchemy:postgresql+psycopg2://…, mysql+pymysql://… (#40)
+    // Brokers and other stores: amqp(s), rediss, clickhouse, cockroachdb, …
+    rx: /\b(?:postgresql|postgres|mysql|mariadb|mongodb(?:\+srv)?|rediss?|mssql|sqlserver|sqlite|oracle|clickhouse|cockroachdb|cassandra|neo4j(?:\+s)?|amqps?|snowflake|db2)(?:\+[a-z0-9_]{1,30})?:\/\/[^\s"'<>`]+|\bjdbc:[a-z]+:\/\/[^\s"'<>`]+|\bjdbc:\/\/[^\s"'<>`]+/gi,
     fakeValues: ['postgresql://user:pass@localhost:5432/db'],
+  },
+  {
+    id: 'url_password',
+    label: 'Password in URL',
+    labelAr: 'كلمة مرور في رابط',
+    cat: 'cred',
+    // `scheme://user:password@host` for any scheme db_conn does not already
+    // cover whole: smtp, ftp, https, git, sftp, … (#40). Only the password is
+    // replaced; the user and host stay readable.
+    rx: /\b[a-z][a-z0-9+.-]{1,30}:\/\/[^\s:\/@"'<>`]{0,256}:([^\s@\/"'<>`]{1,256})@(?=[\w[])/gi,
+    valueGroups: [1],
+    validate: (match) => {
+      const rest = match.slice(match.indexOf('://') + 3, -1);
+      const password = rest.slice(rest.indexOf(':') + 1);
+      return isSecretValue('password', password) && !EXAMPLE_PASSWORD_RX.test(password);
+    },
+    fakeValues: ['fake-url-password'],
+  },
+  {
+    id: 'session_cookie',
+    label: 'Session Cookie',
+    labelAr: 'ملف ارتباط الجلسة',
+    cat: 'cred',
+    // Whoever holds a session cookie is signed in as its owner (#40).
+    detect: detectSessionCookies,
+    fakeValues: ['fake-session-cookie'],
   },
   {
     id: 'sql_password',
@@ -1260,12 +1506,22 @@ const BASE_PATTERNS = [
     //   C. XML / .NET config attributes: `<add key="ApiKey" value="..."/>`.
     // Form A's key used to have to follow whitespace or `,;({[`, so every quoted
     // key -- appsettings.json, credentials.json, Python dicts -- was missed.
+    //   L. Form A at the start of a line with a bare value -- `.env`, YAML,
+    //      INI, properties. The value runs to whitespace, so `#`, `;`, `,`,
+    //      `)` and `]` inside a password are kept: `password: Xk9#mQ2;vL,7(pZ)]`
+    //      used to lose all but `Xk9` (#40). A trailing `,` or `;` is left out.
+    // Form A's key may also follow `?`, `&`, `:` or `]` (#40): a URL query
+    // (`?password=`), `.npmrc` (`//registry…/:_authToken=`), an INI section.
     rx: new RegExp(
-      `(?<=^|[\\s,;({\\[$"'\`-])(${SECRET_KEY})["']?[ \\t]*[:=][ \\t]*(?:"([^"\\n]+)"|'([^'\\n]+)'|([^\\s\\n#,;)\\]}"'\`]+))`
-      + `|<(${SECRET_KEY})(?:[ \\t][^>\\n]*)?>([^<\\n]{1,256})<\\/\\5>`
+      `(?<=^[ \\t]{0,40}(?:export[ \\t]{1,8}|-[ \\t]{1,8})?)(${SECRET_KEY})[ \\t]*[:=][ \\t]*(?![ \\t"'\`])(\\S+?)(?=[,;]?(?:[ \\t]|\\r?$))`
+      + `|(?<=^|[\\s,;({\\[$"'\`?&:\\]-])(${SECRET_KEY})["']?[ \\t]*[:=][ \\t]*(?:"([^"\\n]+)"|'([^'\\n]+)'|([^\\s\\n#,;)\\]}"'\`&]+))`
+      + `|<(${SECRET_KEY})(?:[ \\t][^>\\n]*)?>([^<\\n]{1,256})<\\/\\7>`
       + `|\\b(?:key|name)[ \\t]*=[ \\t]*["'](${SECRET_KEY})["'][ \\t]+value[ \\t]*=[ \\t]*["']([^"'\\n]+)["']`,
       'gim',
     ),
+    // Forms the regex cannot express: define(), name/value pairs, curl -u,
+    // secret table columns.
+    detect: detectSecretForms,
     // Keys that contain a trigger word but never hold a secret, and values that
     // are not secrets. Kept short and specific on purpose: for a DLP tool,
     // over-masking a benign value is a nuisance while missing a real `TOKEN=` is
@@ -1273,39 +1529,17 @@ const BASE_PATTERNS = [
     // explicit, auditable exception.
     validate: (match) => {
       const { key, value, keyQuoted, valueQuoted } = splitSecretAssignment(match);
-      if (/^(?:[\w.-]*_)?TOKENIZ(?:E|ER|ERS|ATION)$/i.test(key)) return false;
-      if (!value) return false;
-      // JSON has no bare strings, so a bare value after a quoted key is code:
-      // `{"X-Signature": HMAC_SECRET}` references a variable, it is not one.
-      if (keyQuoted && !valueQuoted) return false;
-      // Never re-detect a token this masker already emitted. Now that only the
-      // VALUE is replaced, `API_KEY=[OPENAI_KEY_1]` still looks like KEY=value
-      // -- so without this, masking stopped being idempotent and the Guardian's
-      // verifier could never converge (it re-scans its own output and would
-      // escalate forever, ending in BLOCK).
-      if (/^\[[A-Z0-9_]*\]?$/.test(value)) return false;
-      // JSON makes these common: `"password": null`, `"token": {` (an object).
-      if (/^(?:null|undefined|none|nil|true|false)$/i.test(value)) return false;
-      if (/^[{[]/.test(value)) return false;
-      // A key that describes a property of a secret, not the secret itself:
-      // `max_tokens: 1024`, `token_type: bearer`, `PASSWORD_MIN_LENGTH=12`.
-      if (describesSecretProperty(key)) return false;
-      // A reference or placeholder, not a value: `${DB_PASSWORD}`, `$TOKEN`,
-      // `{{ secrets.KEY }}`, `%(password)s`, `<your-key>`, `sk-proj-...`.
-      if (SECRET_PLACEHOLDER_RX.test(value)) return false;
-      // A loopback host is not infrastructure worth hiding.
-      if (/host/i.test(key) && LOCAL_HOST_RX.test(value)) return false;
-      return true;
+      return isSecretValue(key, value, keyQuoted, valueQuoted);
     },
-    // Replace the VALUE only -- form A: group 2 double-quoted, 3 single-quoted,
-    // 4 bare; form B: 6; form C: 8 -- never the whole `KEY=value`. Masking the
+    // Replace the VALUE only -- form L: group 2; form A: 4 double-quoted,
+    // 5 single-quoted, 6 bare; form B: 8; form C: 10 -- never the whole `KEY=value`. Masking the
     // key name too turned `OPENAI_API_KEY=sk-...` into a bare `[ENV_SECRET_1]`,
     // which destroys the one piece of context an agent needs to reason about
     // the file -- and it shadowed the specific credential patterns, so the
     // `[OPENAI_KEY_1]` token this project's own README advertises could never
     // actually appear. Narrowing the span also lets a more specific pattern win
     // the overlap.
-    valueGroups: [2, 3, 4, 6, 8],
+    valueGroups: [2, 4, 5, 6, 8, 10],
   },
   {
     id: 'hex_secret',
