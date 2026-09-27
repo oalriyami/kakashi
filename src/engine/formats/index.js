@@ -1,5 +1,6 @@
 const path = require('path');
-const { isTextFile, readText, writeText, CODE_EXTS, SPECIAL_FILENAMES } = require('./text');
+const fs = require('fs');
+const { isTextFile, readText, writeText, decodeText, CODE_EXTS, SPECIAL_FILENAMES } = require('./text');
 
 let xlsxHandler;
 let docxHandler;
@@ -45,13 +46,40 @@ async function readFile(filePath) {
   }
 }
 
+/**
+ * Read a text output back and remove it unless it holds exactly what was meant
+ * to be written.
+ *
+ * The Office writers check their own output value by value (./package.js). A
+ * text output is simpler: the masked string is already known, so the only
+ * thing that can go wrong is the write itself -- an encoding that cannot hold
+ * the text, a file that decodes differently from how it was encoded. Comparing
+ * the round trip catches all of it.
+ */
+function verifyRoundTrip(outputPath, expected, enc, { endsWith = false } = {}) {
+  let back;
+  try {
+    back = decodeText(fs.readFileSync(outputPath), enc).text;
+  } catch (_) {
+    back = null;
+  }
+  const ok = back !== null && (endsWith ? back.endsWith(expected) : back === expected);
+  if (!ok) {
+    fs.rmSync(outputPath, { force: true });
+    throw new Error('the masked file did not read back as written, so it was removed');
+  }
+}
+
 async function writeMasked(filePath, outputPath, data, replMap, maskedText) {
   const format = data.format || getFormat(filePath);
   loadHandlers();
   switch (format) {
-    case 'text':
-      writeText(outputPath, maskedText);
+    case 'text': {
+      const enc = { encoding: data.encoding || 'utf-8', bom: Boolean(data.bom) };
+      writeText(outputPath, maskedText, enc);
+      verifyRoundTrip(outputPath, maskedText, enc);
       return outputPath;
+    }
     case 'xlsx':
       await xlsxHandler.writeXlsx(filePath, outputPath, data, replMap);
       return outputPath;
@@ -62,7 +90,10 @@ async function writeMasked(filePath, outputPath, data, replMap, maskedText) {
       await pptxHandler.writePptx(filePath, outputPath, data, replMap);
       return outputPath;
     case 'pdf':
-      return pdfHandler.writePdf(filePath, outputPath, maskedText);
+      pdfHandler.writePdf(filePath, outputPath, maskedText);
+      // The extract is written after a short header.
+      verifyRoundTrip(outputPath, maskedText, { encoding: 'utf-8', bom: false }, { endsWith: true });
+      return outputPath;
     default:
       throw new Error(`Unknown format: ${format}`);
   }

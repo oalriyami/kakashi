@@ -363,17 +363,68 @@ async function runOoxmlPartsTests() {
   // --- Verification: nothing is written when a value survives ---------------
 
   await check('#27 mask: a value the writer cannot reach fails closed and writes nothing', async () => {
-    // A key split across two PARAGRAPHS is found in the joined text but lives
-    // in no single paragraph the writer can rewrite (#29).
-    const body = para(run('-----BEGIN RSA PRIVATE KEY-----'))
-      + para(run('MIIEowIBAAKCAQEA7bq1vKmCnRZ6YJbWkKq3ERVtVQwIIGZ9yDbXwv0T0vD0xg'))
-      + para(run('-----END RSA PRIVATE KEY-----'));
-    const f = await makePackage(dir, 'pem.docx', { 'word/document.xml': docxBody(body) });
-    const out = path.join(dir, 'pem-out.docx');
+    // A key that starts in the body and ends in a footnote is found in the
+    // joined text but lives in no single part the writer can rewrite.
+    const f = await makePackage(dir, 'split-parts.docx', {
+      'word/document.xml': docxBody(para(run('-----BEGIN RSA PRIVATE KEY-----'))
+        + para(run('MIIEowIBAAKCAQEA7bq1vKmCnRZ6YJbWkKq3ERVtVQwIIGZ9yDbXwv0T0vD0xg'))),
+      'word/footnotes.xml': `<?xml version="1.0"?><w:footnotes ${W}><w:footnote w:id="1">${para(run('-----END RSA PRIVATE KEY-----'))}</w:footnote></w:footnotes>`,
+    });
+    const { text } = await formats.readFile(f);
+    assert.ok(maskText(text).findings.some((x) => x.id === 'ssh_key'), 'test premise: key found across parts');
+    const out = path.join(dir, 'split-parts-out.docx');
     const r = cli(['mask', f, '-o', out]);
     assert.strictEqual(r.status, 2, `expected exit 2, got ${r.status}: ${r.stdout}`);
     assert.ok(/still contains/.test(r.stderr), r.stderr);
     assert.ok(!fs.existsSync(out), 'a partially masked file was written');
+  });
+
+  // =========================================================================
+  // #29 -- a value that spans paragraphs is masked, not reported and left.
+  // =========================================================================
+
+  const PEM_LINES = ['-----BEGIN RSA PRIVATE KEY-----',
+    'MIIEowIBAAKCAQEA7bq1vKmCnRZ6YJbWkKq3ERVtVQwIIGZ9yDbXwv0T0vD0xg',
+    'q3ERVtVQwIIGZ9yDbXwv0T0vD0xgMIIEowIBAAKCAQEA7bq1vKmCnRZ6YJbWkK',
+    '-----END RSA PRIVATE KEY-----'];
+
+  await check('#29 docx: a private key pasted one line per paragraph is removed', async () => {
+    const body = para(run('Deploy key:')) + PEM_LINES.map((l) => para(run(l))).join('')
+      + '<w:p/>' + para(run('Rotate quarterly.'));
+    const f = await makePackage(dir, 'pem.docx', { 'word/document.xml': docxBody(body) });
+    const out = path.join(dir, 'pem-out.docx');
+    const r = cli(['mask', f, '-o', out]);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.deepStrictEqual(await leaks(out, ['BEGIN RSA', 'MIIEowIBAAK', 'q3ERVtVQ', 'END RSA']), []);
+    const { text } = await formats.readFile(out);
+    assert.strictEqual(text, 'Deploy key:\n[SSH_KEY_1]\nRotate quarterly.');
+  });
+
+  await check('#29 docx: blank paragraphs inside the value do not stop the match', async () => {
+    const body = PEM_LINES.map((l) => para(run(l))).join(para(run('  ')));
+    const f = await makePackage(dir, 'pem-gaps.docx', { 'word/document.xml': docxBody(body) });
+    const out = path.join(dir, 'pem-gaps-out.docx');
+    assert.strictEqual(cli(['mask', f, '-o', out]).status, 0);
+    assert.deepStrictEqual(await leaks(out, ['MIIEowIBAAK', 'END RSA']), []);
+  });
+
+  await check('#29 pptx: a value split across paragraphs of one text box is removed', async () => {
+    const f = await makePackage(dir, 'pem.pptx', { 'ppt/slides/slide1.xml': sld('sld', shape(PEM_LINES)) });
+    const out = path.join(dir, 'pem-out.pptx');
+    assert.strictEqual(cli(['mask', f, '-o', out]).status, 0);
+    assert.deepStrictEqual(await leaks(out, ['MIIEowIBAAK', 'END RSA']), []);
+  });
+
+  await check('#29 ooxml: masking a large part stays linear', () => {
+    // 20,000 paragraphs with an email in every one: 20,000 spans over one part.
+    const xml = docxBody(Array.from({ length: 20000 }, (_, i) => para(run(`row ${i} u${i}@example.org`))).join(''));
+    const map = {};
+    for (let i = 0; i < 20000; i++) map[`u${i}@example.org`] = `[EMAIL_${i + 1}]`;
+    const t0 = Date.now();
+    const out = ooxml.maskXml(xml, map, ooxml.WORD);
+    const ms = Date.now() - t0;
+    assert.ok(!out.includes('@example.org'), 'an address survived');
+    assert.ok(ms < 5000, `took ${ms} ms`);
   });
 
   await check('#27 verify: a name that also appears in the theme does not block the write', async () => {

@@ -134,8 +134,28 @@ to 3.
 - **Masked Office files are verified before they are written** (#27). The
   masked package is reloaded from its own bytes, and if any value the mask set
   out to replace is still present, `mask` exits 2 and writes nothing, where it
-  used to print "1 replacement made". Values split across paragraphs (#29) now
-  fail this way instead of leaking.
+  used to print "1 replacement made". The check also reads the package the way
+  the scanner does, so a value that runs from one part into another (body into
+  footnote) cannot leave a fragment in each.
+- **Values that span paragraphs are masked** (#29). A private key pasted one
+  line per paragraph, or an address block, was found by the scanner in the
+  joined text but matched paragraph by paragraph by the writer, which could
+  never see it: `mask` reported it replaced while every line stayed in the
+  file. Each part is now masked as the scanner reads it, so the value becomes
+  one token in its first paragraph and the paragraphs after it are emptied.
+  Masking is linear in the size of a part (20,000 replacements in one part:
+  30 s to well under a second).
+- **Every text output is read back before it is kept** (#29). Text and PDF
+  extracts are re-read with the same decoder and removed, with exit 2, unless
+  they hold exactly the masked text.
+- **UTF-16 text files are read and masked** (#30). Every text file was read as
+  UTF-8, so a UTF-16 file (Excel's "Unicode Text", Windows PowerShell 5's `>`)
+  scanned as 0 findings and was masked into a mangled copy that still held
+  every value. The encoding is now detected from the byte order mark, or from
+  the NUL bytes of UTF-16 without one; the file is decoded, and the masked
+  copy is written back in the same encoding with the same BOM. A truncated
+  UTF-16 file, an invalid surrogate pair or UTF-32 text is refused with exit 2
+  instead of being guessed at.
 - **Embedded objects Kakashi cannot read are reported** (#27). OLE objects,
   ActiveX controls and macro projects are listed as unscanned: `scan` and
   `mask` say so, `guard --json` has `unscannedParts`, and Guardian returns

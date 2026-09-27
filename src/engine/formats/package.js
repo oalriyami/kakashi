@@ -501,6 +501,16 @@ async function finishPackage(zip, kind, replMap) {
   const out = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
   const survivors = await findSurvivors(await JSZip.loadAsync(out), kind, replMap);
   if (survivors.length > 0) throw new MaskVerificationError(survivors);
+
+  // A value the detector found ACROSS two parts -- a key that starts in the
+  // body and ends in a footnote -- is in no single part, so the per-part check
+  // above cannot see what is left of it. Read the package the way the scanner
+  // does and look again.
+  const { text } = await readPackage(out, kind);
+  const across = orderKeys(replMap)
+    .filter((k) => !String(replMap[k]).includes(k))
+    .filter((k) => occurrences(text, k).length > 0);
+  if (across.length > 0) throw new MaskVerificationError([{ part: 'text spanning several parts', count: across.length }]);
   return out;
 }
 

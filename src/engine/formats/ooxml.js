@@ -233,70 +233,92 @@ function extractText(xml, spec) {
 }
 
 /**
- * Find where each replacement applies within a paragraph's text.
+ * Find where each replacement applies within a text.
  *
  * Longest key first, so a short secret that happens to be a substring of a
  * longer one cannot claim the span before the longer match is considered. An
- * occurrence overlapping a span already claimed is skipped.
+ * occurrence overlapping a span already claimed is skipped. Claimed characters
+ * are tracked in a bitmap, so the cost is linear in the matched text rather
+ * than quadratic in the number of spans -- this runs over a whole part, and a
+ * long document can have thousands.
  *
  * @returns {Array<{ start, end, replacement }>} sorted by start, non-overlapping
  */
 function findSpans(text, orderedKeys, replMap) {
   const spans = [];
+  const claimed = new Uint8Array(text.length);
   for (const key of orderedKeys) {
     if (!key) continue;
     // Whole words only for name-like values (see ./replace.js).
     for (const at of occurrences(text, key)) {
       const end = at + key.length;
-      const clashes = spans.some((s) => at < s.end && end > s.start);
-      if (!clashes) spans.push({ start: at, end, replacement: replMap[key] });
+      let clashes = false;
+      for (let i = at; i < end; i++) {
+        if (claimed[i]) { clashes = true; break; }
+      }
+      if (clashes) continue;
+      claimed.fill(1, at, end);
+      spans.push({ start: at, end, replacement: replMap[key] });
     }
   }
   return spans.sort((a, b) => a.start - b.start);
 }
 
 /**
- * Apply replacement spans to one paragraph and hand each run its new text.
+ * Apply replacement spans to a sequence of runs and hand each run its new text.
  *
  * A span that covers several runs is not duplicated into each of them: the
  * first WRITABLE run the span touches receives the replacement token, and the
  * runs covering the remainder contribute nothing for that stretch. That is what
- * lets a value split across three runs collapse into one token without
- * disturbing the text around it. Read-only runs (breaks, tabs) are never
- * rewritten, so a span that crosses a line break keeps the break.
+ * lets a value split across three runs -- or across three paragraphs -- collapse
+ * into one token without disturbing the text around it. Read-only runs (breaks,
+ * tabs, paragraph separators) are never rewritten.
+ *
+ * Runs and spans are both in offset order, so one forward pass over each does.
  *
  * @returns {Map<run, string>} only for runs whose text changed
  */
-function rewriteParagraph(runs, spans) {
+function rewriteRuns(runs, spans) {
   const ranges = [];
-  let cursor = 0; // offset of the current run's start within the paragraph text
+  let cursor = 0; // offset of each run's start within the joined text
   for (const run of runs) {
     ranges.push([cursor, cursor + run.text.length]);
     cursor += run.text.length;
   }
 
+  // The owner of a span is the first writable run it overlaps.
   const owner = new Map();
+  let r = 0;
   for (const s of spans) {
-    const i = runs.findIndex((r, j) => !r.readonly && ranges[j][0] < s.end && ranges[j][1] > s.start);
-    if (i !== -1) owner.set(s, runs[i]);
+    while (r < runs.length && ranges[r][1] <= s.start) r++;
+    for (let k = r; k < runs.length && ranges[k][0] < s.end; k++) {
+      if (!runs[k].readonly && ranges[k][1] > s.start) {
+        owner.set(s, runs[k]);
+        break;
+      }
+    }
   }
 
   const edits = new Map();
+  let first = 0; // first span that can still overlap the current run
   runs.forEach((run, j) => {
-    if (run.readonly) return;
     const [a, b] = ranges[j];
-    const overlapping = spans.filter((s) => s.start < b && s.end > a);
-    if (overlapping.length === 0) return;
+    while (first < spans.length && spans[first].end <= a) first++;
+    if (run.readonly) return;
 
     let out = '';
     let pos = a;
-    for (const s of overlapping) {
+    let touched = false;
+    for (let k = first; k < spans.length && spans[k].start < b; k++) {
+      const s = spans[k];
+      touched = true;
       const from = Math.max(s.start, a);
       const to = Math.min(s.end, b);
       if (from > pos) out += run.text.slice(pos - a, from - a);
       if (owner.get(s) === run) out += s.replacement;
       pos = to;
     }
+    if (!touched) return;
     if (pos < b) out += run.text.slice(pos - a);
 
     if (out !== run.text) edits.set(run, out);
@@ -310,8 +332,16 @@ function orderKeys(replMap) {
 }
 
 /**
- * Mask one XML part: reassemble each paragraph, apply the replacement map across
- * run boundaries, and splice the results back into the XML.
+ * Mask one XML part: reassemble its text, apply the replacement map across run
+ * AND paragraph boundaries, and splice the results back into the XML.
+ *
+ * The text is built exactly as `extractText` builds it -- non-blank paragraphs
+ * joined by a newline -- because that is the text the detector saw. A value it
+ * found across several paragraphs (a private key pasted one line per paragraph,
+ * an address block) is therefore found here too, and collapses into one token
+ * in its first paragraph while the paragraphs after it are emptied. Matching
+ * paragraph by paragraph could never see such a value, and the mask used to
+ * report it as replaced while every line of it stayed in the file (#29).
  *
  * @param {string} xml
  * @param {object} replMap - original value -> replacement token
@@ -322,33 +352,35 @@ function maskXml(xml, replMap, spec) {
   const orderedKeys = orderKeys(replMap);
   if (orderedKeys.length === 0) return xml;
 
-  const groups = groupByParagraph(findRuns(xml, spec));
-  const allEdits = [];
-
-  for (const group of groups) {
-    const paraText = group.runs.map((r) => r.text).join('');
-    if (!paraText) continue;
-    const spans = findSpans(paraText, orderedKeys, replMap);
-    if (spans.length === 0) continue;
-    for (const [run, text] of rewriteParagraph(group.runs, spans)) {
-      allEdits.push({ run, text });
-    }
+  const sequence = [];
+  for (const group of groupByParagraph(findRuns(xml, spec))) {
+    if (!group.runs.map((r) => r.text).join('').trim()) continue;
+    if (sequence.length > 0) sequence.push({ text: '\n', tag: null, readonly: true });
+    sequence.push(...group.runs);
   }
+  const text = sequence.map((r) => r.text).join('');
+  const spans = findSpans(text, orderedKeys, replMap);
+  if (spans.length === 0) return xml;
 
-  // Splice right-to-left so earlier offsets stay valid as we mutate the string.
-  allEdits.sort((x, y) => y.run.innerStart - x.run.innerStart);
+  const edits = [...rewriteRuns(sequence, spans)]
+    .map(([run, value]) => ({ run, text: value }))
+    .sort((x, y) => x.run.tagStart - y.run.tagStart);
 
-  let out = xml;
-  for (const { run, text } of allEdits) {
+  // One forward pass: copy the XML between edited runs, emit each edited run.
+  const pieces = [];
+  let copied = 0;
+  for (const { run, text: value } of edits) {
     let openTag = xml.slice(run.tagStart, run.openEnd);
     // A run that now begins or ends with whitespace needs xml:space="preserve",
     // or Word and PowerPoint will silently trim it and join two words together.
-    if (/^\s|\s$/.test(text) && !/xml:space=/.test(openTag)) {
+    if (/^\s|\s$/.test(value) && !/xml:space=/.test(openTag)) {
       openTag = `${openTag.slice(0, -1)} xml:space="preserve">`;
     }
-    out = out.slice(0, run.tagStart) + openTag + encodeXml(text) + out.slice(run.innerEnd);
+    pieces.push(xml.slice(copied, run.tagStart), openTag, encodeXml(value));
+    copied = run.innerEnd;
   }
-  return out;
+  pieces.push(xml.slice(copied));
+  return pieces.join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -463,7 +495,9 @@ module.exports = {
   groupByParagraph,
   extractText,
   findSpans,
-  rewriteParagraph,
+  rewriteRuns,
+  // Kept for callers written against the per-paragraph API.
+  rewriteParagraph: rewriteRuns,
   maskXml,
   findElements,
   findAttributes,
