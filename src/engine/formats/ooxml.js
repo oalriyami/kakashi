@@ -1,11 +1,12 @@
 /**
- * Shared OOXML run handling for .docx and .pptx.
+ * Shared OOXML run handling for .docx, .pptx and the text-bearing parts of .xlsx.
  *
- * Both formats store a paragraph's text as a SEQUENCE OF RUNS -- `<w:t>` inside
- * `<w:p>` for Word, `<a:t>` inside `<a:p>` for PowerPoint -- and both split those
- * runs for reasons that have nothing to do with where a value starts or ends:
- * a spellcheck mark, a language attribute, a revision id, one bolded character.
- * A single email address routinely lands in the file as two or three runs.
+ * Word and DrawingML store a paragraph's text as a SEQUENCE OF RUNS -- `<w:t>`
+ * inside `<w:p>` for Word, `<a:t>` inside `<a:p>` for PowerPoint, charts and
+ * shapes -- and both split those runs for reasons that have nothing to do with
+ * where a value starts or ends: a spellcheck mark, a language attribute, a
+ * revision id, one bolded character. A single email address routinely lands in
+ * the file as two or three runs.
  *
  * That makes the naive approach wrong in two ways at once, and this module
  * exists to fix both:
@@ -28,11 +29,53 @@
  *      the match give up their share. Untouched runs keep their bytes exactly,
  *      so formatting elsewhere in the paragraph survives.
  *
+ * Some characters are not text runs at all but ELEMENTS: a soft line break is
+ * `<w:br/>` (or `<a:br/>`), a tab is `<w:tab/>`, a non-breaking hyphen is
+ * `<w:noBreakHyphen/>`. Skipping them fused a signature block into one line --
+ * `Rajesh Kumar` + break + `Mobile: +971…` read as `Rajesh KumarMobile: +971…`,
+ * so the name, the phone and part of a card number were never detected, and a
+ * token could swallow the label that followed. They are now READ-ONLY runs:
+ * they contribute their character to the paragraph text, so offsets line up
+ * with what a reader sees, and the writer never rewrites them.
+ *
  * Entities are decoded on read and re-encoded on write, so a value containing
  * `&` is matched as `&` rather than as `&amp;`.
  */
 
-const { occurrences } = require('./replace');
+const { occurrences, replaceOccurrences } = require('./replace');
+
+/**
+ * Run grammar for WordprocessingML (document body, headers, footers, notes,
+ * comments, text boxes).
+ *
+ * `w:delText` is text removed under Track Changes and `w:instrText` is a field
+ * code (a HYPERLINK field holds its `mailto:` target there). Neither is visible,
+ * both are stored in the file and travel with it, so both are read and masked.
+ */
+const WORD = {
+  paraTag: 'w:p',
+  textTags: ['w:t', 'w:delText', 'w:instrText'],
+  marks: [
+    // `<w:br w:type="page"/>` is a break too. `<w:tab w:val=… w:pos=…/>` is a
+    // tab STOP definition inside paragraph properties, not a tab character,
+    // which is why only the attribute-less form counts.
+    { rx: '<w:(?:br|cr)\\b[^>]*?/>', text: '\n' },
+    { rx: '<w:tab\\s*/>', text: '\t' },
+    { rx: '<w:ptab\\b[^>]*?/>', text: '\t' },
+    { rx: '<w:noBreakHyphen\\s*/>', text: '-' },
+  ],
+};
+
+/**
+ * Run grammar for DrawingML text (slides, masters, layouts, notes, charts,
+ * SmartArt, shapes and text boxes in spreadsheets). A tab is a literal `\t`
+ * inside `<a:t>`; a line break is `<a:br/>` or `<a:br><a:rPr/></a:br>`.
+ */
+const DRAWING = {
+  paraTag: 'a:p',
+  textTags: ['a:t'],
+  marks: [{ rx: '<a:br\\b[^>]*?>', text: '\n' }],
+};
 
 const ENTITIES = [
   [/&amp;/g, '&'],
@@ -57,62 +100,124 @@ function encodeXml(s) {
     .replace(/>/g, '&gt;');
 }
 
+/** Encode text for a double-quoted XML attribute value. */
+function encodeAttr(s) {
+  return encodeXml(s).replace(/"/g, '&quot;');
+}
+
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Accept both the full grammar and the legacy `{ textTag, paraTag }` shape.
+ * @returns {{ paraTag: string, textTags: string[], marks: object[] }}
+ */
+function normalizeSpec(spec) {
+  if (spec.textTags) return { marks: [], ...spec };
+  // A bare `{ textTag: 'w:t' }` gets the marks of the dialect it names, so a
+  // caller that predates the marks still reads breaks correctly.
+  const base = spec.textTag.startsWith('w:') ? WORD : spec.textTag.startsWith('a:') ? DRAWING : { marks: [] };
+  return { paraTag: spec.paraTag, textTags: [spec.textTag], marks: base.marks };
+}
+
+const tokenizerCache = new Map();
+
+/** One regex that walks paragraphs, text runs and marks in document order. */
+function tokenizer(spec) {
+  const key = JSON.stringify(spec);
+  if (tokenizerCache.has(key)) return tokenizerCache.get(key);
+  const p = esc(spec.paraTag);
+  const alts = [
+    // `<w:p>` and `<w:p …>` open a paragraph; `<w:pPr>` must not, hence the
+    // lookahead. A self-closing `<w:p/>` is empty and opens nothing.
+    `(?<popen><${p}(?=[\\s>/])[^>]*?(?<pself>/?)>)`,
+    `(?<pclose></${p}>)`,
+    // Self-closing `<w:t/>` holds no text and has no inner range.
+    `<(?<ttag>${spec.textTags.map(esc).join('|')})(?<tattr>\\s[^>]*?)?(?<!/)>(?<ttext>[^<]*)</\\k<ttag>>`,
+    ...spec.marks.map((m, i) => `(?<m${i}>${m.rx})`),
+  ];
+  const rx = new RegExp(alts.join('|'), 'g');
+  tokenizerCache.set(key, rx);
+  return rx;
+}
+
 /**
  * Locate every text run in one XML part, tagged with the paragraph it belongs to.
  *
+ * Paragraphs nest: a text box is a whole `<w:txbxContent>` of paragraphs inside
+ * a run of the outer paragraph. A stack keeps the outer paragraph's runs after
+ * the text box attributed to the outer paragraph, not to the text box.
+ *
  * @param {string} xml
- * @param {{ textTag: string, paraTag: string }} spec - e.g. { textTag: 'w:t', paraTag: 'w:p' }
- * @returns {Array<{ tagStart, openEnd, innerStart, innerEnd, text, para }>}
+ * @param {object} spec - WORD, DRAWING, or `{ textTag, paraTag }`
+ * @returns {Array<{ tagStart, openEnd, innerStart, innerEnd, attrs, text, tag, para, readonly }>}
+ *   Marks (`readonly: true`) carry their character in `text` and have no range.
  */
 function findRuns(xml, spec) {
-  // Paragraph starts, so each run can be attributed to the block it sits in.
-  // `<w:p>` and `<w:p …>` both count; `<w:pPr>` and friends must not, hence the
-  // explicit `[ />]` terminator.
-  const paraStarts = [];
-  const paraRx = new RegExp(`<${spec.paraTag}[ />]`, 'g');
-  let pm;
-  while ((pm = paraRx.exec(xml)) !== null) paraStarts.push(pm.index);
-
+  const s = normalizeSpec(spec);
+  const rx = tokenizer(s);
+  rx.lastIndex = 0;
   const runs = [];
-  // Skip self-closing `<w:t/>`: it holds no text and has no inner range.
-  const rx = new RegExp(`<${spec.textTag}([^>]*)>([^<]*)</${spec.textTag}>`, 'g');
+  const stack = [];
+  let nextPara = 0;
   let m;
   while ((m = rx.exec(xml)) !== null) {
-    const tagStart = m.index;
-    const openEnd = m.index + 1 + spec.textTag.length + m[1].length + 1;
-    const innerStart = openEnd;
-    const innerEnd = innerStart + m[2].length;
-    // The last paragraph opening at or before this run. -1 groups any stray run
-    // that sits outside a paragraph into its own bucket.
-    let para = -1;
-    for (let i = paraStarts.length - 1; i >= 0; i--) {
-      if (paraStarts[i] < tagStart) { para = i; break; }
+    const g = m.groups;
+    if (g.popen !== undefined) {
+      if (!g.pself) stack.push(nextPara++);
+      continue;
     }
-    runs.push({
-      tagStart,
-      openEnd,
-      innerStart,
-      innerEnd,
-      attrs: m[1],
-      text: decodeXml(m[2]),
-      para,
-    });
+    if (g.pclose !== undefined) {
+      stack.pop();
+      continue;
+    }
+    // -1 groups any stray run that sits outside a paragraph into its own bucket.
+    const para = stack.length ? stack[stack.length - 1] : -1;
+    if (g.ttag !== undefined) {
+      const openEnd = m.index + 1 + g.ttag.length + (g.tattr ? g.tattr.length : 0) + 1;
+      runs.push({
+        tagStart: m.index,
+        openEnd,
+        innerStart: openEnd,
+        innerEnd: openEnd + g.ttext.length,
+        attrs: g.tattr || '',
+        text: decodeXml(g.ttext),
+        tag: g.ttag,
+        para,
+        readonly: false,
+      });
+      continue;
+    }
+    const markIdx = s.marks.findIndex((_, i) => g[`m${i}`] !== undefined);
+    runs.push({ text: s.marks[markIdx].text, tag: null, para, readonly: true });
   }
   return runs;
 }
 
-/** Group runs into paragraphs, preserving document order. */
+/**
+ * Group runs into paragraphs, in the order the paragraphs open.
+ *
+ * Where a paragraph switches between KINDS of text -- visible text, deleted
+ * text, a field code -- a read-only newline is inserted between them. Those
+ * runs are adjacent in the XML but not in any sense a reader would join: a
+ * deleted "Ahmed" followed by an inserted "Sara" must not read as "AhmedSara",
+ * and a field code's `"mailto:…"` must not fuse with the display text after it.
+ * Runs of the SAME kind still join with nothing, so a value split by formatting
+ * stays whole.
+ */
 function groupByParagraph(runs) {
-  const groups = [];
-  let current = null;
+  const byPara = new Map();
   for (const run of runs) {
-    if (!current || current.para !== run.para) {
-      current = { para: run.para, runs: [] };
-      groups.push(current);
+    if (!byPara.has(run.para)) byPara.set(run.para, { para: run.para, runs: [], lastTag: null });
+    const group = byPara.get(run.para);
+    if (!run.readonly) {
+      if (group.lastTag && group.lastTag !== run.tag) {
+        group.runs.push({ text: '\n', tag: null, para: run.para, readonly: true });
+      }
+      group.lastTag = run.tag;
     }
-    current.runs.push(run);
+    group.runs.push(run);
   }
-  return groups;
+  return [...byPara.values()].map(({ para, runs: r }) => ({ para, runs: r }));
 }
 
 /**
@@ -123,7 +228,7 @@ function groupByParagraph(runs) {
 function extractText(xml, spec) {
   return groupByParagraph(findRuns(xml, spec))
     .map((g) => g.runs.map((r) => r.text).join(''))
-    .filter((t) => t.length > 0)
+    .filter((t) => t.trim().length > 0)
     .join('\n');
 }
 
@@ -153,24 +258,35 @@ function findSpans(text, orderedKeys, replMap) {
 /**
  * Apply replacement spans to one paragraph and hand each run its new text.
  *
- * A span that covers several runs is not duplicated into each of them: the run
- * where the span STARTS receives the replacement token, and the runs covering
- * the remainder contribute nothing for that stretch. That is what lets a value
- * split across three runs collapse into one token without disturbing the text
- * around it.
+ * A span that covers several runs is not duplicated into each of them: the
+ * first WRITABLE run the span touches receives the replacement token, and the
+ * runs covering the remainder contribute nothing for that stretch. That is what
+ * lets a value split across three runs collapse into one token without
+ * disturbing the text around it. Read-only runs (breaks, tabs) are never
+ * rewritten, so a span that crosses a line break keeps the break.
  *
  * @returns {Map<run, string>} only for runs whose text changed
  */
 function rewriteParagraph(runs, spans) {
-  const edits = new Map();
+  const ranges = [];
   let cursor = 0; // offset of the current run's start within the paragraph text
   for (const run of runs) {
-    const a = cursor;
-    const b = cursor + run.text.length;
-    cursor = b;
+    ranges.push([cursor, cursor + run.text.length]);
+    cursor += run.text.length;
+  }
 
+  const owner = new Map();
+  for (const s of spans) {
+    const i = runs.findIndex((r, j) => !r.readonly && ranges[j][0] < s.end && ranges[j][1] > s.start);
+    if (i !== -1) owner.set(s, runs[i]);
+  }
+
+  const edits = new Map();
+  runs.forEach((run, j) => {
+    if (run.readonly) return;
+    const [a, b] = ranges[j];
     const overlapping = spans.filter((s) => s.start < b && s.end > a);
-    if (overlapping.length === 0) continue;
+    if (overlapping.length === 0) return;
 
     let out = '';
     let pos = a;
@@ -178,15 +294,19 @@ function rewriteParagraph(runs, spans) {
       const from = Math.max(s.start, a);
       const to = Math.min(s.end, b);
       if (from > pos) out += run.text.slice(pos - a, from - a);
-      // Only the run containing the span's first character emits the token.
-      if (s.start >= a) out += s.replacement;
+      if (owner.get(s) === run) out += s.replacement;
       pos = to;
     }
     if (pos < b) out += run.text.slice(pos - a);
 
     if (out !== run.text) edits.set(run, out);
-  }
+  });
   return edits;
+}
+
+/** Longest key first; see findSpans. */
+function orderKeys(replMap) {
+  return Object.keys(replMap).filter(Boolean).sort((a, b) => b.length - a.length);
 }
 
 /**
@@ -195,11 +315,11 @@ function rewriteParagraph(runs, spans) {
  *
  * @param {string} xml
  * @param {object} replMap - original value -> replacement token
- * @param {{ textTag: string, paraTag: string }} spec
+ * @param {object} spec - WORD, DRAWING, or `{ textTag, paraTag }`
  * @returns {string} updated XML
  */
 function maskXml(xml, replMap, spec) {
-  const orderedKeys = Object.keys(replMap).sort((a, b) => b.length - a.length);
+  const orderedKeys = orderKeys(replMap);
   if (orderedKeys.length === 0) return xml;
 
   const groups = groupByParagraph(findRuns(xml, spec));
@@ -231,13 +351,125 @@ function maskXml(xml, replMap, spec) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Simple text: element content and attribute values.
+//
+// Not everything worth reading is a run. A document's author is the text of
+// `<dc:creator>`, a picture's alt text is a `descr="…"` attribute, a comment's
+// author is `w:author="…"`, a hyperlink's `mailto:` target is the `Target` of a
+// relationship. These have no run structure to preserve, so each value is read
+// and rewritten whole.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every `<el …>text</el>` for the given element names, as { start, end, text }
+ * over the inner (still-encoded) range.
+ */
+function findElements(xml, names) {
+  if (!names || names.length === 0) return [];
+  const rx = new RegExp(`<(${names.map(esc).join('|')})(\\s[^>]*?)?(?<!/)>([^<]*)</\\1>`, 'g');
+  const out = [];
+  let m;
+  while ((m = rx.exec(xml)) !== null) {
+    const start = m.index + m[0].length - m[1].length - 3 - m[3].length;
+    out.push({ start, end: start + m[3].length, text: decodeXml(m[3]) });
+  }
+  return out;
+}
+
+/**
+ * Every matching attribute value. A rule is `{ attr }` (on any element) or
+ * `{ el, attr }` (only on that element), plus an optional `when` regex the
+ * element's opening tag must match -- a relationship's `Target` counts only
+ * when `TargetMode="External"`.
+ */
+function findAttributes(xml, rules) {
+  if (!rules || rules.length === 0) return [];
+  const out = [];
+  const compiled = rules.map((rule) => ({
+    ...rule,
+    rx: new RegExp(`(?:^|\\s)${esc(rule.attr)}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'g'),
+  }));
+  const tagRx = /<([A-Za-z_][\w.:-]*)(\s[^<>]*?)\/?>/g;
+  let t;
+  while ((t = tagRx.exec(xml)) !== null) {
+    const el = t[1];
+    const attrs = t[2];
+    const attrsStart = t.index + 1 + el.length;
+    for (const rule of compiled) {
+      if (rule.el && rule.el !== el) continue;
+      if (rule.when && !rule.when.test(attrs)) continue;
+      const arx = rule.rx;
+      arx.lastIndex = 0;
+      let a;
+      while ((a = arx.exec(attrs)) !== null) {
+        const value = a[1] !== undefined ? a[1] : a[2];
+        const start = attrsStart + a.index + a[0].length - 1 - value.length;
+        out.push({ start, end: start + value.length, text: decodeXml(value), attr: true });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Text of one part under a coverage rule (see ./package.js): runs, element
+ * content and attribute values, one paragraph or value per line.
+ */
+function extractPart(xml, rule) {
+  const lines = [];
+  for (const spec of rule.runs || []) {
+    const t = extractText(xml, spec);
+    if (t) lines.push(t);
+  }
+  for (const v of findElements(xml, rule.elements)) if (v.text.trim()) lines.push(v.text);
+  for (const v of findAttributes(xml, rule.attrs)) if (v.text.trim()) lines.push(v.text);
+  return lines.join('\n');
+}
+
+/**
+ * Mask one part under a coverage rule. `maskOnlyElements` are rewritten but
+ * never read for detection -- values that merely REPEAT text found elsewhere
+ * (a sheet name listed again in docProps/app.xml) and that would only add noise
+ * to a scan.
+ */
+function maskPart(xml, replMap, rule) {
+  const orderedKeys = orderKeys(replMap);
+  if (orderedKeys.length === 0) return xml;
+
+  let out = xml;
+  for (const spec of rule.runs || []) out = maskXml(out, replMap, spec);
+
+  const values = [
+    ...findElements(out, [...(rule.elements || []), ...(rule.maskOnlyElements || [])]),
+    ...findAttributes(out, rule.attrs),
+  ].sort((a, b) => b.start - a.start);
+
+  for (const v of values) {
+    let text = v.text;
+    for (const key of orderedKeys) {
+      if (text.includes(key)) text = replaceOccurrences(text, key, replMap[key]);
+    }
+    if (text === v.text) continue;
+    out = out.slice(0, v.start) + (v.attr ? encodeAttr(text) : encodeXml(text)) + out.slice(v.end);
+  }
+  return out;
+}
+
 module.exports = {
+  WORD,
+  DRAWING,
   findRuns,
   groupByParagraph,
   extractText,
   findSpans,
   rewriteParagraph,
   maskXml,
+  findElements,
+  findAttributes,
+  extractPart,
+  maskPart,
   decodeXml,
   encodeXml,
+  encodeAttr,
 };

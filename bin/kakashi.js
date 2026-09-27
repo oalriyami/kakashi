@@ -45,6 +45,17 @@ function finishWith(code) {
   process.exitCode = code;
 }
 
+/**
+ * Say so when part of a file could not be read (an embedded OLE object, an
+ * ActiveX control, a macro project). A finding count covers only what was
+ * read, so "0 findings" must not be taken as "clean" here.
+ */
+function warnUnscanned(data) {
+  const n = (data && data.unscanned ? data.unscanned.length : 0);
+  if (n === 0) return;
+  console.log(chalk.yellow(`   ${n} embedded object(s) could not be read and were not checked.`));
+}
+
 async function processFile(filePath, options, action) {
   // `--stdin` reads fd 0, so the file argument is meaningless there and is
   // declared optional. Everything else needs a real path. The existence check
@@ -99,6 +110,7 @@ async function processFile(filePath, options, action) {
     printHeader(filePath, BRAND);
     // Default: counts only (agent-safe). --verbose enables per-finding previews.
     printFindings(findings, { cliName: CLI_NAME, quiet: !options.verbose });
+    warnUnscanned(data);
     return finishWith(findings.length > 0 ? 1 : 0);
   }
 
@@ -142,7 +154,9 @@ async function processFile(filePath, options, action) {
     if (byCat[f.cat] == null) byCat[f.cat] = 0;
     byCat[f.cat]++;
   }
-  console.log(chalk.gray(`  (${byCat.id} ID & docs, ${byCat.pii} personal info, ${byCat.cred} credentials)\n`));
+  console.log(chalk.gray(`  (${byCat.id} ID & docs, ${byCat.pii} personal info, ${byCat.cred} credentials)`));
+  warnUnscanned(data);
+  console.log('');
   process.exit(0);
 }
 
@@ -552,6 +566,9 @@ program
         verifications: result.verifications.map(({ observation, ...v }) => v),
         verificationPassed: result.auditEvent.verificationPassed,
         approvalsNeeded: result.approvalsNeeded,
+        // Embedded objects that could not be read. Above zero, "no findings"
+        // does not mean the file is clean.
+        unscannedParts: result.observation ? result.observation.unscannedParts || 0 : 0,
         event: result.auditEvent,
       }, null, 2));
     } else {

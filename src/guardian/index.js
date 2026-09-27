@@ -38,6 +38,13 @@ const { Verifier } = require('./verifier');
 const audit = require('./audit');
 const paths = require('./paths');
 
+/**
+ * Approval name for releasing a file that holds content Kakashi could not read
+ * (an OLE object, an ActiveX control, a macro project). Granted like a data
+ * class: `--approve UNSCANNED_CONTENT`.
+ */
+const UNSCANNED_CONTENT = 'UNSCANNED_CONTENT';
+
 const DECISIONS = {
   ALLOW: 'ALLOW',
   ALLOW_WITH_TRANSFORMATION: 'ALLOW_WITH_TRANSFORMATION',
@@ -157,6 +164,26 @@ async function runGuardian(opts = {}) {
         });
       }
 
+      // Content Kakashi could not read cannot be vouched for. Before anything
+      // is released outside the machine -- the original or a transformed copy,
+      // which would carry the same embedded object -- a person has to accept
+      // that the file was not fully checked.
+      if (observation.unscannedParts > 0 && context.destination.external
+        && !context.hasApprovalFor(UNSCANNED_CONTENT)) {
+        const { destinationId, policyId } = rulesFor(context.policy, context.destination.id);
+        state.addApprovalRequest({
+          iteration,
+          classes: [UNSCANNED_CONTENT],
+          destination: destinationId,
+          policy: policyId,
+        });
+        return finish({
+          decision: DECISIONS.REQUIRE_APPROVAL,
+          reasonCode: 'UNSCANNED_CONTENT',
+          extra: { approvalsNeeded: [UNSCANNED_CONTENT] },
+        });
+      }
+
       // Nothing the policy objects to: release the original untouched. The
       // Guardian's job is to allow legitimate work, not to transform for its
       // own sake.
@@ -272,6 +299,7 @@ async function runGuardian(opts = {}) {
 module.exports = {
   runGuardian,
   DECISIONS,
+  UNSCANNED_CONTENT,
   // Re-exported so callers (CLI, tests, future MCP/HTTP surfaces) have one entry
   // point rather than reaching into individual modules.
   SecurityGoal,

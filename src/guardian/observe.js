@@ -47,6 +47,7 @@ class Observation {
       byCategory: this.byCategory,
       bySeverity: this.bySeverity,
       pdplArticles: this.pdplArticles,
+      unscannedParts: this.unscannedParts,
     };
   }
 }
@@ -112,6 +113,10 @@ async function observe(resolvedPath, opts = {}) {
     bySeverity: summary.bySeverity,
     // Kept for explainability: the report the DPO already knows how to read.
     pdplArticles: Object.keys(summary.byArticle).sort(),
+    // Embedded objects the format reader could not open (OLE objects, ActiveX
+    // controls, macro projects). A count only: "0 findings" does not mean
+    // "clean" while this is above zero.
+    unscannedParts: (data.unscanned || []).length,
   });
 
   return { observation, text: data.text, data };

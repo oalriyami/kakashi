@@ -160,7 +160,7 @@ sequenceDiagram
 | [src/engine/name-spans.js](../src/engine/name-spans.js) | Name spans from the list: Arabic runs segmented at a listed given name (`non_latin_name`), lower-case and ALL-CAPS names in text, a name after a greeting or title, repeats of a full name; a confidence per span (`high` field or cue, `medium` list, `low` Title Case only) that `maskText({ minConfidence })` and each Guardian destination's `minNameConfidence` can filter on | `createNameSpanDetectors`, `meetsConfidence` |
 | [src/engine/masker.js](../src/engine/masker.js) | Tokenise + reconstruct, in one linear pass | `maskText(text, opts)` |
 | [src/engine/fakes.js](../src/engine/fakes.js) | `--mode fake` values: distinct per original, deterministic, never-live where the format allows | `fakeValue(id, n, fakeValues)` |
-| [src/engine/formats/](../src/engine/formats/) | Per-format read/write. Spreadsheets are read one row per line so headers label columns; writers replace name-like values as whole words (`replace.js`) | `readFile`, `writeMasked` |
+| [src/engine/formats/](../src/engine/formats/) | Per-format read/write. Spreadsheets are read one row per line so headers label columns; writers replace name-like values as whole words (`replace.js`). Office files are covered part by part from one table (`package.js`: body, notes, comments, masters, charts, properties, link targets, embedded files), and the masked package is verified before it is written | `readFile`, `writeMasked` |
 | [src/engine/db/](../src/engine/db/) | Client-side DB masking | `streamMasked(conn, query, opts)` |
 
 ### 3.2 Compliance & UX

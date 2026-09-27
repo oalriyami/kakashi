@@ -44,6 +44,7 @@ const DECISION_EXPLANATION = {
   NO_PROTECTION_REQUIRED:       'Nothing detected here is prohibited or restricted at this destination.',
   GOAL_SATISFIED:               'The protected artifact contains no prohibited data class.',
   HUMAN_APPROVAL_REQUIRED:      'Policy requires a person to approve this release.',
+  UNSCANNED_CONTENT:            'The file holds embedded content Kakashi cannot read, so it was not fully checked.',
   CLASS_DENIED_AT_DESTINATION:  'Policy forbids this data class reaching this destination in any form.',
   PROTECTION_EXHAUSTED:         'Every permitted transform was tried and the artifact is still unsafe.',
   MAX_ITERATIONS_EXHAUSTED:     'A safe state was not reached within the iteration budget.',

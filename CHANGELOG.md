@@ -114,6 +114,43 @@ to 3.
 
 ### Fixed
 
+- **Office files are read and masked in full** (#27). A `.docx`, `.pptx` or
+  `.xlsx` was read only for its body text, so everything else was missing from
+  both the scan and the masked copy, and Guardian released the unchanged
+  original: footnotes and endnotes, tracked deletions, field codes
+  (`HYPERLINK "mailto:…"`), alt text, comment and revision authors, slide
+  masters and layouts, charts, SmartArt, cell comments, formulas, sheet and
+  defined names, document and custom properties, `customXml` data, and the
+  target of every external link. A coverage table per format
+  ([src/engine/formats/package.js](src/engine/formats/package.js)) now drives
+  reading, masking and verification, matched on each part's declared content
+  type so off-convention part names (openpyxl's `xl/comments/comment1.xml`)
+  are found too. Office files embedded in Office files, such as a chart's data
+  workbook, are handled recursively. A sheet whose name holds a value is
+  renamed to a legal name, and formulas that refer to it follow. The
+  first-page thumbnail, which pictures the original text, is dropped from the
+  masked copy. Prompt text in master and layout placeholders ("Click to edit
+  Master title style") is not scanned, since it never renders.
+- **Masked Office files are verified before they are written** (#27). The
+  masked package is reloaded from its own bytes, and if any value the mask set
+  out to replace is still present, `mask` exits 2 and writes nothing, where it
+  used to print "1 replacement made". Values split across paragraphs (#29) now
+  fail this way instead of leaking.
+- **Embedded objects Kakashi cannot read are reported** (#27). OLE objects,
+  ActiveX controls and macro projects are listed as unscanned: `scan` and
+  `mask` say so, `guard --json` has `unscannedParts`, and Guardian returns
+  `REQUIRE_APPROVAL` (`UNSCANNED_CONTENT`) before releasing such a file to an
+  external destination. Approve with `--approve UNSCANNED_CONTENT`.
+- **Line breaks and tabs in Word and PowerPoint separate text** (#28). Soft
+  breaks (`<w:br/>`, `<a:br/>`), tabs and non-breaking hyphens are elements,
+  not text, and were skipped, so a signature block read as one run-on line:
+  the name, phone and part of a card number went undetected, and a token could
+  swallow the label after a tab. They now count as read-only characters, so
+  the text matches what a reader sees and the writer never removes them.
+  Deleted and inserted text under Track Changes no longer fuse, and a text box
+  no longer takes over the rest of the paragraph it is anchored in. Reading a
+  large document is also linear now (80,000 paragraphs: 7.3 s to 1.8 s), and
+  masked packages are compressed again.
 - **Secrets under quoted keys are detected** (#3). `env_secret` now reads
   `{"password": "…"}` (JSON), `{'password': '…'}` (Python / JS), XML elements
   (`<password>…</password>`) and .NET-style attributes
