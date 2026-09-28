@@ -100,6 +100,24 @@ const LONE_PLACE_NAMES = new Set([
 const RANK = { low: 0, medium: 1, high: 2 };
 
 /**
+ * What may separate two words of one name: a single space (#42). Two or more
+ * spaces, or a tab, separate columns of an aligned table.
+ */
+const WORD_GAP_RX = /^[ \u00A0]$/;
+
+/**
+ * One-letter Arabic prefixes -- "and", "so", "with", "for", "like" -- written
+ * joined to the next word: وفاطمة, بسالم, لمحمد (#42).
+ */
+const AR_CLITICS = new Set(['و', 'ف', 'ب', 'ل', 'ك']);
+
+/** Verbs of contacting someone: `اتصل ب…`, `تواصل مع`, `راسل`. */
+const AR_CONTACT_VERBS = new Set([
+  'اتصل', 'اتصلت', 'اتصلوا', 'اتصلي', 'يتصل', 'نتصل', 'سنتصل', 'تواصل', 'تواصلت', 'راسل', 'راسلت',
+  'التقى', 'التقيت', 'اجتمع', 'اجتمعت', 'رحب', 'رحبت',
+].map(normalizeArabic));
+
+/**
  * @param {object} deps
  * @param {Set<string>} deps.commonEn - ordinary English words (lower case)
  * @param {Set<string>} deps.commonAr - ordinary Arabic words
@@ -138,8 +156,17 @@ function createNameSpanDetectors({
     AR_WORD_RX.lastIndex = 0;
     let m;
     while ((m = AR_WORD_RX.exec(text)) !== null) {
-      const tok = { raw: m[0], norm: normalizeArabic(m[0]), light: lightAr(m[0]), start: m.index, end: m.index + m[0].length };
-      if (run && /^[ \t]+$/.test(text.slice(run[run.length - 1].end, tok.start))) run.push(tok);
+      let tok = { raw: m[0], norm: normalizeArabic(m[0]), light: lightAr(m[0]), start: m.index, end: m.index + m[0].length };
+      // `اتصل بسالم النعيمي`: the name is behind a joined prefix letter. Strip
+      // it when the word is not a name itself (وليد is) and the rest is one.
+      const rest = m[0].slice(1);
+      if (AR_CLITICS.has(m[0][0]) && rest.length >= 3 && !arCommon(tok)
+        && !isGivenName(m[0]) && !isFamilyName(m[0])
+        && (isGivenName(rest) || isFamilyName(rest) || AR_HEAD_PARTICLES.has(normalizeArabic(rest)))) {
+        tok = { raw: rest, norm: normalizeArabic(rest), light: lightAr(rest), start: m.index + 1, end: tok.end, prefixed: true };
+      }
+      // The gap is measured to the whole word, prefix letter included.
+      if (run && WORD_GAP_RX.test(text.slice(run[run.length - 1].end, m.index))) run.push(tok);
       else runs.push(run = [tok]);
     }
     return runs;
@@ -170,7 +197,9 @@ function createNameSpanDetectors({
       while (i < run.length) {
         const t = run[i];
         const prev = run[i - 1];
-        const cue = (prev && AR_SALUTATIONS.has(prev.norm)) || (i === 0 && cueBefore(text, t.start));
+        // `اتصل بسالم`: after a contact verb, a name behind ب is its object.
+        const cue = (prev && AR_SALUTATIONS.has(prev.norm)) || (i === 0 && cueBefore(text, t.start))
+          || (t.prefixed && prev && AR_CONTACT_VERBS.has(prev.norm));
         // A span starts at a given name, or at a head particle followed by a
         // name (`عبد الله`, `أبو بكر`). An ambiguous given name (`أمل`, `نور`)
         // needs a cue or a strong next token.
@@ -179,21 +208,29 @@ function createNameSpanDetectors({
           head = arUnit(run, i);
         } else if (!arCommon(t) && isGivenName(t.raw)) {
           const next = run[i + 1];
-          const strongNext = next && (arGivenStrong(next) || (!arCommon(next) && isFamilyName(next.raw) && !isAmbiguousName(next.raw))
-            || AR_NASAB.has(next.norm) || AR_FAMILY_PARTICLES.has(next.norm));
-          if (cue || !isAmbiguousName(t.raw) || strongNext) head = 1;
+          const familyNext = next && ((!arCommon(next) && isFamilyName(next.raw) && !isAmbiguousName(next.raw))
+            || arNisba(next) || AR_NASAB.has(next.norm) || AR_FAMILY_PARTICLES.has(next.norm));
+          const strongNext = next && (arGivenStrong(next) || familyNext);
+          // A word read behind a stripped prefix needs a family name after it,
+          // or a cue: `وفاطمة الكعبي` is Fatima, `وعيد سعيد` a happy Eid.
+          if (t.prefixed) {
+            if (cue || familyNext) head = 1;
+          } else if (cue || !isAmbiguousName(t.raw) || strongNext) head = 1;
         }
         if (!head) { i++; continue; }
 
         let j = i + head;
         while (j < run.length && j - i < 7) {
+          if (run[j].prefixed) break; // `محمد وفاطمة` is two people
           const n = arUnit(run, j);
           if (!n) break;
           j += n;
         }
         const toks = run.slice(i, j);
-        // `عبد الله` alone is a name; `أبو ظبي` alone is a place.
-        const isHeadOnly = AR_PLACE_HEADS.has(t.norm) && j - i === head;
+        // `عبد الله` alone is a name; `أبو ظبي` alone is a place -- unless a
+        // listed given name follows the head: `أم خالد` is a person (#42).
+        const isHeadOnly = AR_PLACE_HEADS.has(t.norm) && j - i === head
+          && !(run[i + 1] && arGivenStrong(run[i + 1]));
         const enough = cue ? toks.length >= 1 : toks.length >= 2 && !isHeadOnly;
         if (enough && !isOrgOrPlace(toks.map((x) => x.raw))) {
           const start = toks[0].start;
@@ -221,7 +258,7 @@ function createNameSpanDetectors({
       if (gluedToDigit(text, m.index, m.index + m[0].length)) { run = null; continue; }
       const w = { raw: m[0].replace(/['’-]+$/, ''), start: m.index };
       w.end = w.start + w.raw.length;
-      if (run && /^[ \t]+$/.test(text.slice(run[run.length - 1].end, w.start))) run.push(w);
+      if (run && WORD_GAP_RX.test(text.slice(run[run.length - 1].end, w.start))) run.push(w);
       else runs.push(run = [w]);
     }
     return runs;
@@ -243,7 +280,7 @@ function createNameSpanDetectors({
       words.push({ raw, start: pos - at, end: pos - at + raw.length });
       // As in latinWords, the gap is measured from the end of the word with
       // its trailing apostrophes and hyphens removed.
-      const gap = /[ \t]+/y;
+      const gap = / |\u00A0/y;
       gap.lastIndex = pos + raw.length;
       if (!gap.test(text)) break;
       pos = gap.lastIndex;
@@ -367,7 +404,8 @@ function createNameSpanDetectors({
       const last = words[words.length - 1];
       if (script === 'arabic') {
         const t = { raw: first, norm: normalizeArabic(first), light: lightAr(first) };
-        if (arGivenStrong(t) && first.length >= 3) add(first, s.confidence);
+        // A head particle (`أبو` of `أبو بكر`) is not a name on its own.
+        if (arGivenStrong(t) && first.length >= 3 && !AR_HEAD_PARTICLES.has(t.norm)) add(first, s.confidence);
       } else {
         // A lone repeated word that is also a place stays a place.
         const place = (w) => LONE_PLACE_NAMES.has(w.toLowerCase()) || isOrgOrPlace([w]);

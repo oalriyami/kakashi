@@ -39,7 +39,7 @@ Kakashi started as a masker you invoke. As of **v1.3.1 it has three protection l
 
 | Layer | What it does | Commands |
 | --- | --- | --- |
-| **1 · The engine** | 46 detection patterns (credentials, government IDs, financial, contact, names) across 50+ file formats. Finds a secret, replaces it, and rebuilds the file in its original format — a real `.docx` back, not a text dump. | `scan` `mask` `audit` |
+| **1 · The engine** | 47 detection patterns (credentials, government IDs, financial, contact, names) across 50+ file formats. Finds a secret, replaces it, and rebuilds the file in its original format — a real `.docx` back, not a text dump. | `scan` `mask` `audit` |
 | **2 · The reach** | The same engine pointed at things bigger than one file: a whole repository or shared drive, and live databases queried and masked **client-side**. | `scan-dir` `mask-dir` `db-scan` `db-mask` `db-audit` |
 | **3 · The Guardian** | Guardrails. You hand it a file, the agent asking for it, and what that agent says it needs it for. It observes, assesses risk, plans the *minimum necessary* protection, acts, **re-checks its own output**, and replans if the result is still unsafe. It returns a decision, not just a file. | `guard` `agent-guard` |
 
@@ -58,7 +58,7 @@ Kakashi started as a masker you invoke. As of **v1.3.1 it has three protection l
         └────────────────────┬───────────────────────┘
                              │ uses
         ┌──────────── layer 1 · ENGINE ──────────────┐
-        │  46 patterns · 50+ formats · 3 mask modes  │
+        │  47 patterns · 50+ formats · 3 mask modes  │
         └────────────────────────────────────────────┘
 
                  all of it, on your machine, offline
@@ -383,7 +383,7 @@ DECISION
 
 | Input | Values |
 | --- | --- |
-| **Sensitivity classes** (9) | `CREDENTIAL` · `GOVERNMENT_IDENTIFIER` · `FINANCIAL` · `CONTACT` · `PERSON_NAME` · `QUASI_IDENTIFIER` · `TECHNICAL_IDENTIFIER` · `BUSINESS_ATTRIBUTE` · `LOCATION` — all 46 patterns are mapped, and a drift guard fails CI if a new pattern ships unclassified |
+| **Sensitivity classes** (9) | `CREDENTIAL` · `GOVERNMENT_IDENTIFIER` · `FINANCIAL` · `CONTACT` · `PERSON_NAME` · `QUASI_IDENTIFIER` · `TECHNICAL_IDENTIFIER` · `BUSINESS_ATTRIBUTE` · `LOCATION` — all 47 patterns are mapped, and a drift guard fails CI if a new pattern ships unclassified |
 | **Agent trust** (`--agent`) | `claude` `cursor` `codex` `windsurf` `cline` `copilot` `continue` `local_model`, and a deliberately conservative `unknown` default |
 | **Destination** (`--destination`) | `local` · `local_model` · `known_external` · `external_model` · `unknown` |
 | **Policy** (`--policy`) | Per (policy, destination): `denyOutright` (immediate BLOCK) · `prohibited` (must not be detectable in the output) · `restricted` · `requiresApproval` · `allowedTransforms` (caps which tools the planner may pick) |
@@ -645,7 +645,7 @@ Docs        .md  .rst  .txt  .log
 
 ## What Kakashi Catches
 
-46 active patterns. `kakashi list-patterns` prints every one.
+47 active patterns. `kakashi list-patterns` prints every one.
 
 ### Credentials
 
@@ -683,7 +683,7 @@ Hex Secret         a1b2c3d4e5f6... (40+)   →  [HEX_SECRET_1]       ← 32+ aft
 
 ```
 Emirates ID        784-1990-1234567-1      →  [NATIONAL_ID_1]      ← checksum-verified; also with spaces or no dashes
-Passport           AB1234567               →  [PASSPORT_1]
+Passport           AB1234567               →  [PASSPORT_1]         ← any 6-9 letters and digits after a passport label, key or column
 Visa Number        123/2020/1234567        →  [VISA_ID_1]
 Unified ID         1234567890              →  [UNIFIED_ID_1]
 UAE IBAN           AE070331234567890123    →  [UAE_IBAN_1]         ← mod-97 verified
@@ -692,15 +692,18 @@ Trade License      CN-1234567              →  [TRADE_LIC_1]
 P.O. Box           P.O. Box 12345          →  [POBOX_1]
 Email              user@example.com        →  [EMAIL_1]
 UAE Phone          +971-50-123-4567        →  [INTL_PHONE_1]
-Phone              +1-415-555-0188         →  [PHONE_1]            ← also E.164 (+447946095812)
-IP Address         10.128.3.4              →  [IP_1]
+Phone              +1-415-555-0188         →  [PHONE_1]            ← also E.164 (+447946095812) and any grouping (+965 5012 3456)
+IP Address         10.128.3.4              →  [IP_1]               ← also IPv6
+MAC Address        00:1A:2B:3C:4D:5E       →  [MAC_ADDRESS_1]
 Credit Card        4111 1111 1111 1111     →  [CC_1]               ← Luhn-verified
 SSN / National ID  123-45-6789             →  [SSN_1]
-Date of Birth      DOB: 15/03/1990         →  [DOB_1]
-Age                age: 34                 →  [AGE_1]
+Date of Birth      DOB: 15/03/1990         →  DOB: [DOB_1]         ← ISO and month-name dates, JSON keys, table columns
+Age                age: 34                 →  age: [AGE_1]         ← also "34 years old", JSON keys, table columns
 Full Name          Alex Taylor             →  [FULL_NAME_1]        ← also by field, name list, greeting
 Arabic Name        محمد أحمد               →  [NON_LATIN_NAME_1]   ← must start at a listed given name
 ```
+
+Arabic-Indic (٠-٩), Persian (۰-۹) and full-width (０-９) digits are read like ASCII ones: `رقم الهوية: ٧٨٤-١٩٨٥-…` is an Emirates ID.
 
 Checksum-verified classes are a distinct risk signal to the Guardian: an identifier that *passes* its checksum is live, not a lookalike, and scores higher.
 
@@ -777,7 +780,7 @@ Agentic
 Info
   kakashi stats                 Cumulative masking stats
   kakashi impact                Privacy-preserving impact snapshot (never auto-submitted)
-  kakashi list-patterns         All 46 active detection patterns
+  kakashi list-patterns         All 47 active detection patterns
 
 Global flags
   --mode typed|redact|fake      Replacement style (default: typed)

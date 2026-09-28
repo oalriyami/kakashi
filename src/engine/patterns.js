@@ -1,4 +1,5 @@
-const { createPersonFieldDetector, collectTables } = require('./person-fields');
+const net = require('net');
+const { createPersonFieldDetector, collectTables, normalizeKey } = require('./person-fields');
 const { createNameSpanDetectors } = require('./name-spans');
 const { isKnownName, isAmbiguousName, isGivenName } = require('./names');
 
@@ -641,6 +642,9 @@ function linePrefix(text, idx, max) {
 /** A label that says the next value is a passport number. */
 const PASSPORT_CUE_RX = /(?:passport|travel[ \t_-]*doc|document[ \t_-]*(?:no|number|#)|جواز)/i;
 
+/** A passport label, at the start of a labelled passport number (#41). */
+const PASSPORT_LABEL_START_RX = /^(?:[Pp]assport|PASSPORT|جواز)/;
+
 /** A label that says the next code is a business document, not a passport. */
 const DOCUMENT_CODE_CUE_RX = /\b(?:invoice|inv|order|ref|reference|sku|po|ticket|case|build|version|serial|part|model|item|product|tracking|booking|confirmation|receipt|quote|contract)\b[^\n]{0,12}$|(?:فاتورة|طلب|مرجع)[^\n]{0,12}$/i;
 
@@ -652,6 +656,59 @@ function looksLikeYyyymmdd(digits) {
 
 /** A cue that the next date is a person's date of birth. */
 const BIRTH_CUE_RX = /(?:\bdob\b|d\.o\.b|birth|born|ميلاد|مواليد)/i;
+
+// ---------------------------------------------------------------------------
+// Dates of birth, ages and passport numbers under a label, a JSON key or a
+// table column (#41). Only the value is replaced; the label stays readable.
+// ---------------------------------------------------------------------------
+
+const MONTH = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?'
+  + '|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+/** 14/03/1985, 1985-03-14, 14.03.85, 14 March 1985, 14-Mar-1985, March 14, 1985. */
+const DATE_VALUE = '\\d{1,2}[\\/.\\-]\\d{1,2}[\\/.\\-]\\d{2,4}|\\d{4}[\\/.\\-]\\d{1,2}[\\/.\\-]\\d{1,2}'
+  + `|\\d{1,2}(?:st|nd|rd|th)?[ \\t-]{1,3}${MONTH}\\.?,?[ \\t-]{1,3}\\d{4}`
+  + `|${MONTH}\\.?[ \\t]{1,3}\\d{1,2}(?:st|nd|rd|th)?,?[ \\t]{1,3}\\d{4}`;
+const DATE_VALUE_RX = new RegExp(`^(?:${DATE_VALUE})$`, 'i');
+const DOB_LABEL = '(?:date[ \\t_-]{0,3}of[ \\t_-]{0,3}birth|d\\.?o\\.?b\\.?|birth[ \\t_-]{0,3}date|birthday'
+  + '|born(?:[ \\t]{1,3}on)?|تاريخ[ \\t]{1,3}(?:الميلاد|الولادة)|الميلاد)';
+
+/** Column headers and keys, normalised, for each field class. */
+const FIELD_CLASSES = {
+  dob: {
+    key: /^(?:dob|d_o_b|date_of_birth|birth_?date|birthday|date_birth|تاريخ_الميلاد|تاريخ_الولادة)$/,
+    value: (v) => DATE_VALUE_RX.test(v),
+  },
+  age: {
+    key: /^(?:age|age_years|العمر|السن)$/,
+    value: (v) => /^\d{1,3}$/.test(v) && Number(v) <= 130,
+  },
+  passport: {
+    key: /^(?:passport|passport_(?:no|num|number|id)|جواز|جواز_السفر|رقم_الجواز|رقم_جواز_السفر)$/,
+    value: (v) => /^(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{6,9}$/.test(v),
+  },
+};
+
+/** Cells of a table column headed like `cls`: `dob`, `Date of Birth`, `Passport No.` */
+function fieldColumnDetector(cls) {
+  const { key, value } = FIELD_CLASSES[cls];
+  return (text) => {
+    const spans = [];
+    collectTables(text, (header, offset, raw) => {
+      const lead = raw.length - raw.trimStart().length;
+      const v = raw.trim().replace(/^["']|["']$/g, '');
+      if (!value(v)) return;
+      const start = offset + raw.indexOf(v, lead);
+      spans.push({ start, end: start + v.length, original: v });
+    }, (h) => key.test(normalizeKey(h)));
+    return spans;
+  };
+}
+
+/** An IPv6 address worth masking: valid, at least three groups, not `::1`. */
+function isMaskableIpv6(candidate) {
+  if (!net.isIPv6(candidate)) return false;
+  return candidate.split(':').filter(Boolean).length >= 3 && /\d/.test(candidate);
+}
 
 /** A cue that the next date belongs to a business document. */
 const DOCUMENT_DATE_CUE_RX = /\b(?:invoice|inv|due|order(?:ed)?|payment|paid|delivery|delivered|shipped|created|updated|modified|generated|printed|report(?:ed|ing)?|as of|period|effective|posted|published|released?|version|build|deadline|meeting|scheduled|statement|billing)\b[^\n]{0,16}$|(?:فاتورة|الاستحقاق|الطلب|الدفع|التقرير)[^\n]{0,16}$/i;
@@ -825,9 +882,11 @@ function isValidIban(iban) {
  */
 // At most three hyphens (`Al-Kaabi`, `Jean-Pierre`, `Bin-Al-Nahyan`).
 // Unbounded, a long `Ab-Ab-Ab-…` run was re-scanned from every start: quadratic (#38).
-const TITLE_WORD = "(?:[A-Z]['’][A-Z][a-z]+|(?:Mc|Mac)?[A-Z][a-z]+(?:-[A-Z]?[a-z]+){0,3})";
+// Any script's capitals and small letters (#42): `José García`, `Peñaloza`,
+// `Łukasz`, and a camel-case `Al` / `El` prefix (`AlMansouri`).
+const TITLE_WORD = "(?:\\p{Lu}['’]\\p{Lu}[\\p{Ll}\\p{M}]+|(?:Mc|Mac|Al|El)?\\p{Lu}[\\p{Ll}\\p{M}]+(?:-\\p{Lu}?[\\p{Ll}\\p{M}]+){0,3})";
 /** Lower-case connectors a Title Case name may contain: `bin`, `dela`, `van`. */
-const NAME_PARTICLE = '(?:bin|bint|ibn|al|el|de|del|dela|della|da|das|dos|du|van|von|der|den|le|la|di|y)';
+const NAME_PARTICLE = '(?:bin|bint|ibn|al|el|de|del|dela|della|da|das|dos|du|van|von|der|den|le|la|di|y|Ó)';
 /**
  * A greeting or title is not part of the name after it: `Dear Customer` is no
  * name at all, and in `Dr Kumar` or `Dear Rajesh Kumar` only the name is
@@ -835,13 +894,20 @@ const NAME_PARTICLE = '(?:bin|bint|ibn|al|el|de|del|dela|della|da|das|dos|du|van
  */
 const SALUTATION_WORD = '(?:Dear|Hi|Hello|Hey|Thanks|Thank|Cheers|Regards|Kind|Best|Welcome|Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Eng|Sheikh|Sheikha|Attn)';
 /**
- * Two or more Title Case words, optionally joined by up to two particles:
- * `Sarah Connor`, `Abdulla bin Rashid`, `Jose dela Cruz`, `Fatima Al-Kaabi`,
- * `James O'Brien`.
+ * Two or more Title Case words, optionally joined by up to two particles and
+ * middle initials: `Sarah Connor`, `Abdulla bin Rashid`, `Jose dela Cruz`,
+ * `Fatima Al-Kaabi`, `James O'Brien`, `John F. Kennedy`.
+ *
+ * Words are joined by one space (#42): two or more spaces, or a tab, separate
+ * columns (`Name  Priya Nair   Dept  Finance`), not the parts of a name. The
+ * edges are Unicode-aware; `\b` treats `é` as a non-word character.
  */
+const NAME_EDGE_BEFORE = '(?<![\\p{L}\\p{M}\\p{N}_])';
+const NAME_EDGE_AFTER = '(?![\\p{L}\\p{M}\\p{N}_])';
 const FULL_NAME_RX = new RegExp(
-  `\\b(?!${SALUTATION_WORD}\\b)${TITLE_WORD}(?:[ \\t]+(?:${NAME_PARTICLE}[ \\t]+){0,2}${TITLE_WORD})+\\b`,
-  'g',
+  `${NAME_EDGE_BEFORE}(?!${SALUTATION_WORD}${NAME_EDGE_AFTER})${TITLE_WORD}`
+  + `(?:[ \\u00A0](?:${NAME_PARTICLE}[ \\u00A0]){0,2}(?:\\p{Lu}\\.[ \\u00A0]){0,2}${TITLE_WORD})+${NAME_EDGE_AFTER}`,
+  'gu',
 );
 
 /** Prefixes that make a hyphenated word a name part: `Al-Kaabi`, `Bin-Zayed`. */
@@ -893,13 +959,16 @@ function leadingOpeners(tokens) {
 /**
  * Title Case runs that start with an ordinary word, emitted without it when at
  * least two words remain: `Today Rajesh Kumar` -> `Rajesh Kumar`. (A single
- * remaining word is left to the repeat detector.)
+ * remaining word is left to the repeat detector.) Runs that end in a place
+ * keep their leading names (nameBeforePlace).
  */
 function fullNameTrimmed(text) {
-  const rx = new RegExp(FULL_NAME_RX.source, 'g');
+  const rx = new RegExp(FULL_NAME_RX.source, FULL_NAME_RX.flags);
   const spans = [];
   let m;
   while ((m = rx.exec(text)) !== null) {
+    const placed = nameBeforePlace(m, text);
+    if (placed) { spans.push(placed); continue; }
     const tokens = m[0].split(/([ \t]+)/);
     const words = tokens.filter((_, i) => i % 2 === 0);
     const k = leadingOpeners(words);
@@ -916,6 +985,33 @@ function fullNameTrimmed(text) {
     spans.push({ start, end: start + original.length, original, confidence: fullNameConfidence(original, text, start) });
   }
   return spans;
+}
+
+/**
+ * A name run straight into a place: `Deliver to Priya Nair Burj Tower`. The
+ * place veto used to drop the whole run (#42). When the run opens with two or
+ * more listed names and the rest is a place of its own -- a word that is not a
+ * name plus a place word -- the names are kept. `Sultan Bin Zayed Street` is a
+ * street named after a person and stays unmasked: nothing precedes `Street`.
+ */
+function nameBeforePlace(m, text) {
+  const words = m[0].split(/[ \u00A0]/);
+  if (!isOrgOrPlace(words)) return null;
+  let k = 0;
+  let names = 0;
+  while (k < words.length) {
+    const w = words[k];
+    const particle = /^(?:bin|bint|ibn|al|el|de|del|dela|da|dos|van|von)$/.test(w.toLowerCase()) || /^\p{Lu}\.$/u.test(w);
+    if (names > 0 && particle) { k++; continue; }
+    if (COMMON_EN.has(w.toLowerCase()) || !isKnownName(w) || isAmbiguousName(w)) break;
+    names++;
+    k++;
+  }
+  const rest = words.slice(k);
+  if (names < 2 || rest.length < 2 || !isOrgOrPlace(rest)) return null;
+  const original = words.slice(0, k).join(' ');
+  if (m[0].slice(0, original.length) !== original) return null; // a non-breaking space inside
+  return { start: m.index, end: m.index + original.length, original, confidence: fullNameConfidence(original, text, m.index) };
 }
 
 const detectPersonFields = createPersonFieldDetector({
@@ -979,11 +1075,16 @@ const BASE_PATTERNS = [
     cat: 'id',
     // ICAO-style passport numbers: 2 letters + 6-9 digits, or P<letter> + 7-8 digits.
     // Covers UAE, most EU, US, and Commonwealth passport formats.
-    rx: /\b(?:[A-Z]{2}\d{6,9}|P[A-Z]\d{7,8})\b/g,
+    // After a passport label or key, any 6-9 letters and digits (#41): India
+    // `N1234567`, the US's nine digits, `"passport_number": "K1234567"`.
+    rx: /\b([A-Z]{2}\d{6,9}|P[A-Z]\d{7,8})\b|(?<![A-Za-z])(?:[Pp]assport|PASSPORT|جواز(?:[ \t]{1,3}السفر)?)(?:[ \t_-]{0,3}(?:[Nn]o\.?|NO\.?|[Nn]um(?:ber)?|NUM(?:BER)?|#|[Ii][Dd]))?["']?[ \t]{0,8}[:=#]?[ \t]{0,8}["']?((?=[A-Za-z0-9]{0,8}\d)[A-Za-z0-9]{6,9})(?![A-Za-z0-9])/g,
+    valueGroups: [1, 2],
+    detect: fieldColumnDetector('passport'),
     // Two capitals and digits is also how invoice, order and ticket codes look
     // (`Invoice IN20240115`). A label naming something else, or digits that
     // read as a YYYYMMDD date, rule it out -- unless a passport label is there.
     validate: (match, text, idx) => {
+      if (PASSPORT_LABEL_START_RX.test(match)) return true;
       const before = linePrefix(text, idx, 40);
       if (PASSPORT_CUE_RX.test(before)) return true;
       if (DOCUMENT_CODE_CUE_RX.test(before)) return false;
@@ -1099,7 +1200,9 @@ const BASE_PATTERNS = [
     //   us:       415-555-0188      415.555.0188       415 555 0188
     //   national: 020 7946 0958     0161 496 0000  (trunk 0, 3-4-4 or 4-3-4;
     //             only after a phone label, see validate)
-    rx: /(?:\+\d{1,3}[ \t.-]\d{1,4}[ \t.-]\d{2,4}[ \t.-]\d{3,4}|(?<![\w+])\+[1-9]\d{7,14}|\(\d{2,4}\)[ \t]*\d{3}[ \t.-]\d{4}|\b\d{3}[ \t.-]\d{3}[ \t.-]\d{4}|\b0(?:\d{2}[ \t.-]\d{4}|\d{3}[ \t.-]\d{3})[ \t.-]\d{4})\b/g,
+    //   grouped:  +965 5012 3456    +91 98765 43210    +1 (415) 555-0132 (#41;
+    //             any grouping after a country code, 9-15 digits in all)
+    rx: /(?:\+\d{1,3}(?:[ \t.-]\(?\d{1,6}\)?){1,6}|\+\d{1,3}[ \t.-]\d{1,4}[ \t.-]\d{2,4}[ \t.-]\d{3,4}|(?<![\w+])\+[1-9]\d{7,14}|\(\d{2,4}\)[ \t]*\d{3}[ \t.-]\d{4}|\b\d{3}[ \t.-]\d{3}[ \t.-]\d{4}|\b0(?:\d{2}[ \t.-]\d{4}|\d{3}[ \t.-]\d{3})[ \t.-]\d{4})\b/g,
     validate: (match, text, idx) => {
       const digits = match.replace(/\D/g, '');
       if (digits.length < 9 || digits.length > 15) return false;
@@ -1122,8 +1225,25 @@ const BASE_PATTERNS = [
     label: 'IP Address',
     labelAr: 'عنوان IP',
     cat: 'pii',
-    rx: /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\b/g,
+    // IPv4, and IPv6 (#41) checked by Node's own parser: at least three
+    // groups, so `::1` and `a::b` in code are left alone.
+    rx: /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\b|(?<![\w:.])(?=[0-9A-Fa-f]{0,4}:)[0-9A-Fa-f:]{2,39}(?![\w:])/g,
+    validate: (match) => !match.includes(':') || isMaskableIpv6(match),
     fakeValues: ['192.168.1.1', '10.0.0.1'],
+  },
+  {
+    id: 'mac_address',
+    label: 'MAC Address',
+    labelAr: 'عنوان MAC',
+    cat: 'pii',
+    // A network card's hardware address identifies the device, and so its
+    // owner (#41): 00:1A:2B:3C:4D:5E, 00-1A-2B-3C-4D-5E, 001a.2b3c.4d5e.
+    rx: /(?<![\w:.-])(?:[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}|[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4})(?![\w:.-])/g,
+    // Not the all-zero or broadcast address, and a dotted form needs a hex
+    // letter so version numbers (`1234.5678.9012`) stay.
+    validate: (match) => !/^(?:[0:.-]+|[fF:.-]+)$/.test(match)
+      && (!/^[0-9A-Fa-f]{4}\./.test(match) || /[A-Fa-f]/.test(match)),
+    fakeValues: ['00:00:5E:00:53:01'],
   },
   {
     id: 'cc',
@@ -1156,7 +1276,12 @@ const BASE_PATTERNS = [
     label: 'Date of Birth',
     labelAr: 'تاريخ الميلاد',
     cat: 'pii',
-    rx: /(?:date[ \t]*of[ \t]*birth|dob|birth[ \t]*date|born[ \t]*on)[: \t]+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})/gi,
+    // After a birth label or key, only the date is replaced (#41) -- the label
+    // used to be masked with it -- and ISO, dotted and month-name dates count:
+    // `"dob": "1985-03-14"`, `DOB: 14 March 1985`, `تاريخ الميلاد: 14/03/1985`.
+    rx: new RegExp(`(?<![A-Za-z\\u0600-\\u06FF])${DOB_LABEL}["']?[ \\t]{0,8}[:=]?[ \\t]{0,8}["']?(${DATE_VALUE})(?!\\d)`, 'gi'),
+    valueGroups: [1],
+    detect: fieldColumnDetector('dob'),
     fakeValues: ['01/01/1990'],
   },
   {
@@ -1180,8 +1305,13 @@ const BASE_PATTERNS = [
     label: 'Age',
     labelAr: 'العمر',
     cat: 'pii',
-    rx: /\b(?:age|aged)[: \t]+\d{1,3}\b/gi,
-    fakeValues: ['age: 34'],
+    // Only the number is replaced (#41), after `age`, `aged`, a JSON key, or
+    // before `years old`; and never more than 130.
+    rx: /(?<![A-Za-z_\u0600-\u06FF-])(?:age|aged|العمر|السن)["']?[ \t]{0,8}[:=]?[ \t]{0,8}["']?(\d{1,3})(?![\d.])|\b(\d{1,3})[ \t-]?(?:years?|yrs?)[ \t-]?old\b/gi,
+    valueGroups: [1, 2],
+    validate: (match) => Number(match.match(/\d{1,3}/)[0]) <= 130,
+    detect: fieldColumnDetector('age'),
+    fakeValues: ['34'],
   },
   {
     id: 'full_name',

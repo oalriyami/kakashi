@@ -2,6 +2,31 @@ const { PATTERNS } = require('./patterns');
 const { fakeValue } = require('./fakes');
 const { meetsConfidence } = require('./name-spans');
 
+/**
+ * Characters that stand for ASCII ones in Gulf and East Asian text: the
+ * Arabic-Indic digits (٠-٩), the Persian ones (۰-۹) and the full-width forms of
+ * all of printable ASCII (０-９, Ａ-Ｚ, ＋, －). Each is one UTF-16 unit, like
+ * its ASCII counterpart.
+ */
+const NON_ASCII_FORMS_RX = /[\u0660-\u0669\u06F0-\u06F9\uFF01-\uFF5E]/g;
+
+/**
+ * The text with those characters replaced by their ASCII equivalents, one for
+ * one, so every offset stays valid (#41). Patterns run over this shadow --
+ * `٧٨٤-١٩٨٥-…` is an Emirates ID and `جوال ٠٥٠…` a phone number -- while the
+ * findings keep the characters of the real text.
+ */
+function asciiShadow(text) {
+  NON_ASCII_FORMS_RX.lastIndex = 0;
+  if (!NON_ASCII_FORMS_RX.test(text)) return text;
+  return text.replace(NON_ASCII_FORMS_RX, (c) => {
+    const code = c.charCodeAt(0);
+    if (code <= 0x0669) return String.fromCharCode(code - 0x0660 + 48);
+    if (code <= 0x06F9) return String.fromCharCode(code - 0x06F0 + 48);
+    return String.fromCharCode(code - 0xFF01 + 0x21);
+  });
+}
+
 /** Patterns that find people's names. */
 const NAME_IDS = new Set(['full_name', 'non_latin_name']);
 
@@ -73,13 +98,15 @@ function maskText(text, options = {}) {
   ].filter((p) => !enabled || enabled.includes(p.id));
 
   const matches = [];
+  const shadow = asciiShadow(text);
 
   for (const pattern of activePatterns) {
     // A pattern may also find spans structurally rather than by regex --
     // `full_name` reads the field a value sits in. Its spans compete in the
     // same overlap resolution below as any regex match.
     if (typeof pattern.detect === 'function') {
-      for (const span of pattern.detect(text)) {
+      for (const span of pattern.detect(shadow)) {
+        if (shadow !== text) span.original = text.slice(span.start, span.end);
         if (whitelistSet.has(span.original)) continue;
         if (!meetsConfidence(span.confidence, minConfidence)) continue;
         matches.push({
@@ -106,18 +133,18 @@ function maskText(text, options = {}) {
       : pattern.rx.flags;
     const rx = new RegExp(pattern.rx.source, flags);
     let m;
-    while ((m = rx.exec(text)) !== null) {
+    while ((m = rx.exec(shadow)) !== null) {
       const full = m[0];
-      if (whitelistSet.has(full)) continue;
+      if (whitelistSet.has(full) || whitelistSet.has(text.slice(m.index, m.index + full.length))) continue;
       // validate() always receives the WHOLE match. env_secret's stoplist needs
       // the key name, which sits outside the span it actually replaces.
-      if (pattern.validate && !pattern.validate(full, text, m.index)) continue;
-      const confidence = pattern.confidence ? pattern.confidence(full, text, m.index) : undefined;
+      if (pattern.validate && !pattern.validate(full, shadow, m.index)) continue;
+      const confidence = pattern.confidence ? pattern.confidence(full, shadow, m.index) : undefined;
       if (!meetsConfidence(confidence, minConfidence)) continue;
 
-      let original = full;
       let start = m.index;
       let end = m.index + full.length;
+      let original = text.slice(start, end);
 
       // A pattern that anchors on surrounding context (`API_KEY = "..."`) but
       // should only replace the secret itself declares the capture groups
@@ -128,8 +155,8 @@ function maskText(text, options = {}) {
         const g = pattern.valueGroups.find((i) => m[i] !== undefined);
         if (g === undefined || !m.indices || !m.indices[g]) continue;
         [start, end] = m.indices[g];
-        original = m[g];
-        if (whitelistSet.has(original)) continue;
+        original = text.slice(start, end);
+        if (whitelistSet.has(original) || whitelistSet.has(m[g])) continue;
       }
 
       matches.push({
@@ -221,4 +248,4 @@ function maskText(text, options = {}) {
   return { masked, findings };
 }
 
-module.exports = { maskText, lineAtOffset };
+module.exports = { maskText, lineAtOffset, asciiShadow };

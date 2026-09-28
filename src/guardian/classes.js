@@ -68,6 +68,7 @@ const PATTERN_TO_CLASS = {
   // --- Infrastructure locators --------------------------------------------
   // Not secrets themselves, but they map an organisation's attack surface.
   ip:               'TECHNICAL_IDENTIFIER',
+  mac_address:      'TECHNICAL_IDENTIFIER',
   databricks_host:  'TECHNICAL_IDENTIFIER',
   s3_uri:           'TECHNICAL_IDENTIFIER',
 

@@ -114,6 +114,42 @@ to 3.
 
 ### Fixed
 
+- **Identifier formats common in the Gulf are detected** (#41).
+  - Arabic-Indic (٠-٩), Persian (۰-۹) and full-width (０-９) digits: patterns
+    run over a same-length ASCII copy of the text, so `رقم الهوية:
+    ٧٨٤-١٩٨٥-…` is an Emirates ID and `جوال ٠٥٠١٢٣٤٥٦٧` a phone number, while
+    the findings keep the original characters.
+  - `dob` replaces only the date, not its label, and reads ISO, dotted and
+    month-name dates after a birth label or JSON key (`"dob": "1985-03-14"`,
+    `DOB: 14 March 1985`, `تاريخ الميلاد: …`).
+  - `age` replaces only the number, also in `"age": 38` and `38 years old`,
+    and never above 130.
+  - `passport` takes any 6-9 letters and digits after a passport label or key:
+    India's `N1234567`, a US passport's nine digits.
+  - `dob`, `age` and `passport` columns in CSV, TSV, Markdown tables and
+    spreadsheets are read as such.
+  - `phone` takes any grouping after a country code, 9 to 15 digits in all:
+    `+965 5012 3456`, `+91 98765 43210`, `+44 7911 123456`; and `+1 (415)
+    555-0132` is masked whole instead of leaving `+1`.
+  - `ip` takes IPv6 addresses (checked by Node's parser; at least three
+    groups, so `::1` and `a::b` in code stay), and the new `mac_address`
+    pattern takes MAC addresses in colon, dash and dotted forms.
+- **Accented names, initials, names next to places and Arabic prefix letters**
+  (#42). The QA pass's English name check goes from 411 to 432 of 476 and its
+  Arabic one from 193 to 228 of 234.
+  - Title Case words use Unicode letters: `José García`, `Zoë Müller`,
+    `Łukasz`, and `Peñaloza` is no longer cut at the `ñ`; camel-case `Al`
+    (`AlMansouri`) and the Irish `Ó` count.
+  - Middle initials stay inside a name: `John F. Kennedy`.
+  - A name run straight into a place keeps its names: `Deliver to Priya Nair
+    Burj Tower` masks `Priya Nair`. `Sultan Bin Zayed Street` stays a street.
+  - The words of a name are joined by one space; two or more spaces, or a
+    tab, separate columns (`Name  Priya Nair   Dept  Finance`).
+  - Arabic: a name behind a joined و, ف, ب, ل or ك is found when the rest of
+    the word is a listed name and a family name follows (`وفاطمة الكعبي`), or
+    after a contact verb (`اتصل بسالم`); `أم خالد` is a person, `أم القيوين`
+    still a place.
+  - The name benchmark adds `José García` to every context: recall 187/187.
 - **Passwords in URLs and many common secret keys are masked** (#40). The
   QA pass's realistic `.env` had 14 of 36 secrets left in the clear and 2
   masked in part; now 35 are masked whole and only a six-digit `ADMIN_PIN`

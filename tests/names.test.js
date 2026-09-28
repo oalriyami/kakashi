@@ -29,6 +29,7 @@ const BENCH_NAMES = [
   ['Mohamed Salem', 'Mohamed'], ['Maitha Al Shamsi', 'Maitha'], ['Hamdan Al Falasi', 'Hamdan'],
   ['Rajesh Kumar', 'Rajesh'], ['Priya Nair', 'Priya'], ['Maria Santos', 'Maria'], ['Jose dela Cruz', 'Jose'],
   ['Sarah Connor', 'Sarah'], ["James O'Brien", 'James'], ['Grace Hopper', 'Grace'],
+  ['José García', 'José'], // #42: accents
 ];
 
 const isArabicName = (n) => /[\u0600-\u06FF]/.test(n);
@@ -129,8 +130,9 @@ const BENCH_NEGATIVES = [
  *             the 4 list-based contexts added, and 0 of 43 negatives flagged
  *             (the 27 before plus 16 new ones).
  *   #39:      4 more negatives (0 of 47 flagged), recall unchanged.
+ *   #42:      an accented name (José García) in every context -- 187/187.
  */
-const RECALL_FLOOR = 176;
+const RECALL_FLOOR = 187;
 const FALSE_ALARM_CEILING = 0;
 
 function runBenchmark() {
@@ -364,6 +366,18 @@ async function runNameTests() {
     ['a word glued to digits is a code, not a name', 'IBAN JO94CBJO0010000000000131000302', []],
     ['a road named after a sheikh is a road', 'The office is on Sheikh Zayed Road.', []],
     ['nisba tested on the unfolded word', 'وصل وفد رفيع المستوى إلى المدينة', []],
+    // #42
+    ['accented Latin names', 'Signed by José García and Zoë Müller; report by Carlos Peñaloza.', ['José García', 'Zoë Müller', 'Carlos Peñaloza']],
+    ['a middle initial', 'Speech by John F. Kennedy in 1962.', ['John F. Kennedy']],
+    ['a one-letter Irish particle', 'Please send it to Seán Ó Briain today.', ['Seán Ó Briain']],
+    ['a name run into a place', 'Deliver to Priya Nair Burj Tower', ['Priya Nair']],
+    ['a street named after a person stays a street', 'Sultan Bin Zayed Street', []],
+    ['two spaces separate columns, not names', 'Name  Priya Nair   Dept  Finance', ['Priya Nair']],
+    ['a name behind Arabic و', 'حضر محمد بن راشد وفاطمة الكعبي الاجتماع', ['محمد بن راشد', 'فاطمة الكعبي']],
+    ['a name behind ب after a contact verb', 'اتصل بسالم النعيمي غدا', ['سالم النعيمي']],
+    ['... and عبد behind it', 'اتصل بعبد الرحمن السويدي', ['عبد الرحمن السويدي']],
+    ['a kunya before a given name', 'زرت أم خالد أمس', ['أم خالد']],
+    ['a word behind و that only looks like names', 'كل عام وأنتم بخير وعيد سعيد', []],
   ];
   await check('#39 a country is not a repeat of a first name', () => {
     assert.deepStrictEqual(names('Jordan Carter will fly to Jordan next week.'), ['Jordan Carter']);

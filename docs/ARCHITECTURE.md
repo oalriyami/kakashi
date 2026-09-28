@@ -20,7 +20,7 @@ flowchart TB
     SkillMD["SKILL.md / CLAUDE.md / AGENTS.md<br/>(tells the agent WHEN to scan)"]
   end
   subgraph L2 [Layer 2 - Core Engine]
-    Patterns["patterns.js<br/>(46 detection patterns)"]
+    Patterns["patterns.js<br/>(47 detection patterns)"]
     Fields["person-fields.js<br/>(names by key / column)"]
     Names["names.js + name-spans.js<br/>(name list, Arabic spans)"]
     Masker["masker.js<br/>(tokenise + reconstruct)"]
@@ -154,7 +154,7 @@ sequenceDiagram
 
 | Module | Purpose | Public API |
 | --- | --- | --- |
-| [src/engine/patterns.js](../src/engine/patterns.js) | 46 detection patterns, each a regex with an optional `validate()` and/or a `detect(text)` hook for structural detection; checksum helpers (Luhn, Emirates ID, IBAN mod-97 plus per-country length) | `PATTERNS`, `luhnCheck`, `isValidEmiratesId`, `isValidIban`, `isOrgOrPlace` |
+| [src/engine/patterns.js](../src/engine/patterns.js) | 47 detection patterns, each a regex with an optional `validate()` and/or a `detect(text)` hook for structural detection; checksum helpers (Luhn, Emirates ID, IBAN mod-97 plus per-country length) | `PATTERNS`, `luhnCheck`, `isValidEmiratesId`, `isValidIban`, `isOrgOrPlace` |
 | [src/engine/person-fields.js](../src/engine/person-fields.js) | Names found by the key, label or column header they sit under, in any case or script (the `full_name` pattern's `detect` hook) | `createPersonFieldDetector`, `classifyKey` |
 | [src/engine/names.js](../src/engine/names.js) | The local name list: about 49,000 given and 69,000 family names from Wikidata (CC0) plus a regional supplement, in [src/engine/data/](../src/engine/data/); normalisation for Latin and Arabic; names that are also everyday words | `isGivenName`, `isFamilyName`, `isAmbiguousName`, `nameKey` |
 | [src/engine/name-spans.js](../src/engine/name-spans.js) | Name spans from the list: Arabic runs segmented at a listed given name (`non_latin_name`), lower-case and ALL-CAPS names in text, a name after a greeting or title, repeats of a full name; a confidence per span (`high` field or cue, `medium` list, `low` Title Case only) that `maskText({ minConfidence })` and each Guardian destination's `minNameConfidence` can filter on | `createNameSpanDetectors`, `meetsConfidence` |
@@ -188,7 +188,7 @@ transformation capability of its own. Runs in-process — no daemon required. Se
 | Module | Purpose | Public API |
 | --- | --- | --- |
 | [src/guardian/index.js](../src/guardian/index.js) | The agent loop | `runGuardian(opts)`, `DECISIONS` |
-| [src/guardian/classes.js](../src/guardian/classes.js) | 46 pattern ids → 9 sensitivity classes | `classOf`, `patternIdsFor` |
+| [src/guardian/classes.js](../src/guardian/classes.js) | 47 pattern ids → 9 sensitivity classes | `classOf`, `patternIdsFor` |
 | [src/guardian/state.js](../src/guardian/state.js) | Run memory; drives replanning | `GuardianState`, `STATUS` |
 | [src/guardian/observe.js](../src/guardian/observe.js) | Sensor over `maskText` + `summarize`; metadata only | `observe(path)` |
 | [src/guardian/risk.js](../src/guardian/risk.js) | Contextual score + reason codes | `RiskEngine.assess` |
