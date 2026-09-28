@@ -127,6 +127,34 @@ to 3.
 
 ### Fixed
 
+- **Usage errors exit 2, and every command documents its exit codes** (#49).
+  An unknown command or option, a missing argument or required option, and
+  an invalid choice exited 1 -- the code `scan` uses for "sensitive data
+  found" -- so a typo read as a detection result; `guard` usage errors fell
+  outside its 0/2/3/4 contract. They exit 2 now (with `guard --json`, as a
+  JSON error on stdout). `--mode`, `db-mask --format` and `scan-dir --format`
+  accept only their listed values: `mask -m bogus` masked as `typed` and
+  exited 0, and a bad `db-mask --format` failed only after the query ran. An
+  output folder that does not exist is refused before any work, by name,
+  instead of after a whole scan or query with the name of a temporary file.
+  An unexpected error exits 2 with its message (masked) and no stack trace;
+  `KAKASHI_DEBUG=1` prints the stack. `--help` and each command's help list
+  the exit codes.
+- **agent-guard sees a file's final content** (#50). A changed file was
+  scanned on its first event and every event in the next 500 ms was dropped,
+  so a file written clean and rewritten with a secret 200 ms later was logged
+  with 0 findings and never looked at again. A file is now scanned once it
+  has been quiet for 300 ms (at least every 3 s while it keeps changing), and
+  again if it changed while it was being scanned. `/mask` answers a format
+  Kakashi does not read with 415, and `/scan` and `/mask` answer a file that
+  cannot be parsed with 422, instead of 500; `/scan` requests that were
+  skipped are no longer counted as files scanned.
+- **agent-guard on Linux does not watch dependency trees** (#50). Recursive
+  `fs.watch` put an inotify watch on every folder, `node_modules` and `.git`
+  included -- about 6,000 for one Node project -- and filtered their events
+  only after they arrived. On Linux it now watches one folder at a time and
+  skips `node_modules`, `.git`, `.hg`, `.svn`, `__pycache__`, `.venv` and
+  `venv`.
 - **Guardian's report, errors and stats** (#48). The human report printed
   `PERSON_NAME x[object Object]` for each transformed class; it prints the
   count. `guard --json` printed errors as plain text on stderr; it now prints
@@ -589,6 +617,10 @@ to 3.
     Databricks and current MongoDB clients need Node 20 or later.
   - The lockfile takes `brace-expansion` 2.1.7 (the glob advisory), and CI
     installs with `npm ci`, which the old snowflake-sdk tree made impossible.
+- **agent-guard binds loopback only** (#50). `--host 0.0.0.0` (or any other
+  address) was accepted despite the help text's "must be loopback", and
+  served the API on every interface. A host other than a loopback address
+  (`127.x.x.x`, `::1`, `localhost`) is refused at start, exit 2.
 - **Guardian keeps no values from the task or the file name, and no stale
   artifact** (#48).
   - `--task` was copied verbatim into `--json` and

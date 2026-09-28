@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { program } = require('commander');
+const { program, Option } = require('commander');
 const fs = require('fs');
 const { writeFileSafe, createWriteStreamSafe } = require('../src/lib/safe-write');
 const { parseLimit } = require('../src/engine/db/limit');
@@ -48,6 +48,73 @@ function finishWith(code) {
 }
 
 /**
+ * Exit codes, one contract for every command (#49). Usage errors used to exit
+ * 1 -- the code `scan` uses for "found something" -- so a mistyped flag read
+ * as a detection result.
+ */
+const EXIT_CODES_HELP = `
+Exit codes:
+  0  done; for scan, audit, db-scan, db-audit and scan-dir: nothing found
+  1  scan, audit, db-scan, db-audit, scan-dir: sensitive data found (a result, not a failure)
+  2  error, or a usage error (unknown command or option, missing argument):
+     nothing reliable was produced; scan-dir also when a file could not be read
+  3  guard: a human must approve the release
+  4  guard: the release is blocked`;
+
+const COMMAND_EXIT_HELP = {
+  findings: `
+Exit codes: 0 nothing found · 1 sensitive data found · 2 error or usage error`,
+  'scan-dir': `
+Exit codes: 0 nothing found · 1 sensitive data found · 2 error, usage error, or a file could not be read (the report lists it)`,
+  write: `
+Exit codes: 0 done · 2 error or usage error (nothing, or nothing complete, was written)`,
+  guard: `
+Exit codes: 0 ALLOW / ALLOW_WITH_TRANSFORMATION (use only releasePath) · 2 error or usage error (fail closed)
+            3 REQUIRE_APPROVAL (a human must approve) · 4 BLOCK`,
+  daemon: `
+Exit codes: 0 stopped with Ctrl-C / SIGTERM · 2 could not start, or a usage error`,
+  info: `
+Exit codes: 0 done · 2 error or usage error`,
+};
+
+/**
+ * Print an unexpected error without its stack and exit 2. The message is
+ * masked: an error from a format reader or a driver can quote the data it
+ * choked on. KAKASHI_DEBUG=1 prints the stack as well.
+ */
+function exitOnError(err) {
+  // The reader of a pipe went away (`kakashi list-patterns | head -1`):
+  // nothing is wrong, and there is no one left to tell.
+  if (err && err.code === 'EPIPE') process.exit(process.exitCode || 0);
+  const message = err && err.message ? err.message : String(err);
+  const safe = maskText(message, { minConfidence: 'medium' }).masked;
+  console.error(chalk.red(`Error: ${safe}`));
+  if (process.env.KAKASHI_DEBUG && err && err.stack) {
+    console.error(maskText(String(err.stack), { minConfidence: 'medium' }).masked);
+  }
+  process.exit(2);
+}
+
+/**
+ * Refuse an output path whose folder does not exist, before any work is done.
+ * db-mask used to run the whole query, and scan-dir the whole scan, and only
+ * then fail on the write -- naming a temporary file the user never chose.
+ */
+function assertOutputDir(outputPath) {
+  const dir = path.dirname(path.resolve(outputPath));
+  let st;
+  try {
+    st = fs.statSync(dir);
+  } catch {
+    st = null;
+  }
+  if (!st || !st.isDirectory()) {
+    console.error(chalk.red(`Error: the output folder does not exist: ${path.dirname(outputPath)}`));
+    process.exit(2);
+  }
+}
+
+/**
  * Do two paths name the same file? Compared by device and inode, so a
  * relative path, a symbolic link or a hard link to the input all count.
  * A path that does not exist yet is never the same file.
@@ -87,6 +154,9 @@ async function processFile(filePath, options, action) {
   if (!options.stdin && !fs.existsSync(filePath)) {
     console.error(chalk.red(`Error: File not found: ${filePath}`));
     process.exit(2);
+  }
+  if (action === 'mask' && !options.stdin) {
+    assertOutputDir(options.output || formats.defaultOutputPath(filePath));
   }
 
   const whitelist = options.whitelist
@@ -211,7 +281,18 @@ program
   // Read from package.json rather than restated here: the two drifted at the
   // 1.2.0 bump and `kakashi --version` reported a release that no longer existed.
   .version(require('../package.json').version)
-  .option('--lang <code>', 'CLI language: en | ar (default: env LANG / KAKASHI_LANG)');
+  .option('--lang <code>', 'CLI language: en | ar (default: env LANG / KAKASHI_LANG)')
+  .addHelpText('after', EXIT_CODES_HELP)
+  // Commander's own errors (unknown command or option, missing argument or
+  // required option, an invalid choice) exit 1 by default. They are thrown
+  // instead, and mapped to 2 where the program is parsed (#49). Commands
+  // inherit this setting, so it comes before any of them is defined.
+  .exitOverride();
+
+/** `-m, --mode`: only the three modes. `-m bogus` used to mask as `typed`. */
+function modeOption() {
+  return new Option('-m, --mode <mode>', 'typed|redact|fake').choices(['typed', 'redact', 'fake']).default('typed');
+}
 
 program
   .command('scan [file]')
@@ -234,7 +315,7 @@ program
   .command('mask [file]')
   .description('Mask PII/credentials and write masked version')
   .option('-o, --output <path>', 'Output path')
-  .option('-m, --mode <mode>', 'typed|redact|fake', 'typed')
+  .addOption(modeOption())
   .option('-w, --whitelist <vals>', 'Comma-separated values to skip')
   .option('--overwrite', 'Overwrite original file (asks first; --yes to skip the question)')
   .option('-y, --yes', 'With --overwrite: replace the original without asking')
@@ -252,7 +333,7 @@ program
   .option('-r, --recursive', 'Recurse into subdirectories')
   .option('--ext <exts>', 'Comma-separated extensions to include')
   .option('--exclude <patterns>', 'Glob patterns to exclude')
-  .option('-m, --mode <mode>', 'typed|redact|fake', 'typed')
+  .addOption(modeOption())
   .action(async (directory, options) => {
     if (!fs.existsSync(directory)) {
       console.error(chalk.red(`Error: Directory not found: ${directory}`));
@@ -348,6 +429,7 @@ async function runDbActionUnsafe(conn, options, action) {
     console.error(chalk.red('Error: --query is required'));
     process.exit(2);
   }
+  if (action === 'mask') assertOutputDir(options.output || `masked_query.${options.format || 'jsonl'}`);
   const maskOpts = {
     mode: options.mode || 'typed',
     whitelist: options.whitelist ? options.whitelist.split(',').map((s) => s.trim()) : [],
@@ -501,8 +583,9 @@ program
   .description('Run a query, mask rows locally, write a safe copy (jsonl|json|csv)')
   .requiredOption('-q, --query <sql>', 'SQL / JSON query to run')
   .option('-o, --output <path>', 'Output path (default: masked_query.<fmt>)')
-  .option('-f, --format <fmt>', 'jsonl|json|csv', 'jsonl')
-  .option('-m, --mode <mode>', 'typed|redact|fake', 'typed')
+  // Checked before the query runs; a bad --format used to fail after it.
+  .addOption(new Option('-f, --format <fmt>', 'jsonl|json|csv').choices(['jsonl', 'json', 'csv']).default('jsonl'))
+  .addOption(modeOption())
   .option('-w, --whitelist <vals>', 'Comma-separated values to skip')
   .option('--limit <n>', 'Cap on rows fetched (default 10000)')
   .action(async (conn, options) => {
@@ -515,7 +598,7 @@ program
 program
   .command('scan-dir <directory>')
   .description('Recursively scan a directory and emit a PDPL-mapped compliance report (JSON | HTML | MD | text)')
-  .option('-f, --format <fmt>', 'json | html | md | text', 'text')
+  .addOption(new Option('-f, --format <fmt>', 'json | html | md | text').choices(['json', 'html', 'md', 'text']).default('text'))
   .option('-o, --output <path>', 'Write report to path instead of stdout')
   .option('--parallel <n>', 'Concurrent file scans', '8')
   .option('--no-gitignore', 'Do NOT honour .gitignore / .kakashiignore')
@@ -531,6 +614,8 @@ program
       console.error(chalk.red(`Error: --parallel must be a whole number from 1 to 256, got "${options.parallel}"`));
       process.exit(2);
     }
+
+    if (options.output) assertOutputDir(options.output);
 
     console.error(chalk.cyan(`\n${BRAND} — scan-dir`));
     console.error(chalk.gray(`   Root: ${directory}`));
@@ -843,6 +928,7 @@ program
     const snap = impactSnapshot();
     const json = JSON.stringify(snap, null, 2);
     if (options.write) {
+      assertOutputDir(options.write);
       try {
         writeFileSafe(options.write, json);
       } catch (err) {
@@ -876,8 +962,45 @@ program
     }
   });
 
-program.parse(process.argv);
-
-if (!process.argv.slice(2).length) {
-  program.help();
+// The exit-code line under each command's --help.
+const EXIT_HELP_BY_COMMAND = {
+  scan: 'findings', audit: 'findings', 'db-scan': 'findings', 'db-audit': 'findings',
+  'scan-dir': 'scan-dir',
+  mask: 'write', 'mask-dir': 'write', 'db-mask': 'write',
+  guard: 'guard',
+  'agent-guard': 'daemon',
+  stats: 'info', impact: 'info', 'list-patterns': 'info',
+};
+for (const cmd of program.commands) {
+  const kind = EXIT_HELP_BY_COMMAND[cmd.name()];
+  if (kind) cmd.addHelpText('after', COMMAND_EXIT_HELP[kind]);
 }
+
+/** The command named on the command line, skipping global options. */
+function commandName(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--lang') { i++; continue; }
+    if (!argv[i].startsWith('-')) return argv[i];
+  }
+  return null;
+}
+
+// Anything that escapes a command's own handling exits 2 with its message --
+// not 1 with a stack trace, which read as "findings" and could quote data.
+process.on('uncaughtException', exitOnError);
+process.on('unhandledRejection', exitOnError);
+
+program.parseAsync(process.argv).catch((err) => {
+  if (!(err && typeof err.code === 'string' && err.code.startsWith('commander.'))) return exitOnError(err);
+  // Commander has printed the help, the version or the error already.
+  if (err.exitCode === 0) process.exit(0);
+  if (commandName(process.argv.slice(2)) === 'guard' && process.argv.includes('--json')) {
+    // guard --json callers parse stdout, whatever went wrong (#48).
+    console.log(JSON.stringify({
+      decision: null,
+      error: { code: 'INVALID_ARGUMENT', message: String(err.message).replace(/^error: /, '') },
+      releasePath: null,
+    }, null, 2));
+  }
+  process.exit(2);
+});

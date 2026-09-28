@@ -18,7 +18,7 @@
 [![license](https://img.shields.io/badge/license-MIT-B8C4D4?style=flat)](LICENSE)
 [![agents](https://img.shields.io/badge/agents-7_installed_%2B_any_shell-8A2BE2?style=flat)](#works-inside-your-agent)
 [![formats](https://img.shields.io/badge/formats-50%2B-CC0000?style=flat)](#50-file-formats)
-[![tests](https://img.shields.io/badge/tests-942_passing-4CAF50?style=flat)](tests/)
+[![tests](https://img.shields.io/badge/tests-956_passing-4CAF50?style=flat)](tests/)
 [![network calls](https://img.shields.io/badge/network_calls-zero-1C2030?style=flat)](#privacy-guarantee)
 
 **A local-first privacy engine for agentic AI.**
@@ -794,7 +794,17 @@ Global flags
 Alias: k   (e.g. k scan file.txt)
 ```
 
-Run `kakashi <command> --help` for the per-command flags.
+Run `kakashi <command> --help` for the per-command flags and exit codes.
+
+**Exit codes**, the same for every command:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Done. For `scan`, `audit`, `db-scan`, `db-audit` and `scan-dir`: nothing found |
+| `1` | Only from `scan`, `audit`, `db-scan`, `db-audit` and `scan-dir`: sensitive data found — a result, not a failure |
+| `2` | Error, or a usage error (an unknown command or option, a missing argument, an output folder that does not exist): nothing reliable was produced. `scan-dir` also when a file could not be read |
+| `3` | `guard`: a human must approve the release |
+| `4` | `guard`: the release is blocked |
 
 ---
 
@@ -896,7 +906,7 @@ Patterns, formats, agents — all welcome.
 git clone https://github.com/Muhammadatef/kakashi
 cd kakashi
 npm install
-npm test        # 942 tests, offline, a few seconds
+npm test        # 956 tests, offline, a few seconds
 ```
 
 New pattern? Add to `src/engine/patterns.js` — **and classify it** in `src/guardian/classes.js`, or the drift guard fails the build.<br/>

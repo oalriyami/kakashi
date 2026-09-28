@@ -177,7 +177,7 @@ sequenceDiagram
 
 | Module | Purpose | Public API |
 | --- | --- | --- |
-| [src/agent/guard.js](../src/agent/guard.js) | Loopback HTTP daemon + recursive watcher: native recursive `fs.watch`, else one watcher per directory (Linux on Node 18), else recursive polling. `/health` reports `watchMode`, `watchStrategy` and `watchRecursive` | `start(opts)`, `scanFile`, `maskFile` |
+| [src/agent/guard.js](../src/agent/guard.js) | Loopback HTTP daemon (`--host` must be a loopback address) + recursive watcher: one watcher per directory on Linux, skipping `node_modules`, `.git` and virtualenvs; native recursive `fs.watch` on macOS and Windows; else recursive polling. A changed file is scanned once it has been quiet for 300 ms, and again if it changed while being scanned. `/health` reports `watchMode`, `watchStrategy` and `watchRecursive` | `start(opts)`, `scanFile`, `maskFile` |
 
 ### 3.4 Guardian (v1.2)
 
@@ -367,7 +367,7 @@ UAE-specific overlays:
 | --- | --- | --- |
 | 0 | Success, no findings | Pass |
 | 1 | Findings detected | Fail the pipeline; the JSONL/JSON report shows what and where |
-| 2 | Error (file not found, driver missing, etc.) | Investigate before shipping |
+| 2 | Error, or a usage error: file not found, driver missing, unknown command or option, missing argument, output folder missing. Never 1, so a typo is not read as findings | Investigate before shipping |
 
 `kakashi guard` returns a decision rather than a finding count:
 

@@ -96,7 +96,15 @@ function listFiles(root) {
 const DEFAULTS = {
   port: 8797,
   bindAddress: LOOPBACK,
-  scanCooldownMs: 500, // debounce: don't re-scan a file more than 2×/sec
+  // A changed file is scanned once it has been quiet this long (a trailing
+  // debounce), and scanned again if it changed while it was being scanned.
+  // The old leading-edge cooldown scanned the first write and dropped every
+  // event in the next 500 ms, so a file written clean and then rewritten with
+  // a secret was logged as clean and never looked at again (#50).
+  scanQuietMs: 300,
+  // A file that never goes quiet (a log appended to constantly) is still
+  // scanned at least this often.
+  scanMaxWaitMs: 3000,
   // A request body is a small JSON object naming a path. Anything larger is a
   // mistake or an attack: it used to be buffered whole (400 MB was accepted).
   maxBodyBytes: 64 * 1024,
@@ -333,6 +341,18 @@ function confineOutput(root, input, requested) {
   return real;
 }
 
+/**
+ * Is this a loopback address to bind to? `--host 0.0.0.0` was accepted, and
+ * served the API on every interface of the machine (#50).
+ */
+function isLoopbackBind(host) {
+  const h = String(host).replace(/^\[|\]$/g, '').toLowerCase();
+  if (h === 'localhost' || h === '::1') return true;
+  if (/^::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)
+    && h.split('.').every((n) => Number(n) <= 255);
+}
+
 /** Is this Host header one of our own loopback names? */
 function isLoopbackHost(host, port) {
   if (!host) return false;
@@ -363,13 +383,27 @@ function unreadable(filePath) {
   return null;
 }
 
+/**
+ * Read a file for a scan or a mask. A file that cannot be parsed (a damaged
+ * workbook, a legacy .xls without SheetJS) is the request's problem, answered
+ * 422, not a server fault answered 500 (#50).
+ */
+async function readForDaemon(filePath) {
+  try {
+    return await formats.readFile(filePath);
+  } catch (err) {
+    if (err instanceof Refusal) throw err;
+    throw new Refusal(422, `the file could not be read: ${err.message}`);
+  }
+}
+
 async function scanFile(filePath) {
   const reason = unreadable(filePath);
   if (reason) return { skipped: true, reason };
   if (formats.getFormat(filePath) === null) {
     return { skipped: true, reason: 'unsupported_format' };
   }
-  const data = await formats.readFile(filePath);
+  const data = await readForDaemon(filePath);
   const { findings } = maskText(data.text);
   const { findings: enriched, summary } = summarize(findings);
   return { path: filePath, findings: enriched, summary };
@@ -385,7 +419,12 @@ async function maskFile(filePath, outputPath) {
     const why = { not_found: 'the file does not exist', not_a_file: 'not a regular file', too_large: 'the file is larger than the daemon will read' };
     throw new Refusal(reason === 'too_large' ? 413 : 400, why[reason]);
   }
-  const data = await formats.readFile(filePath);
+  if (formats.getFormat(filePath) === null) {
+    // A format Kakashi does not read is the client's to know about, not a
+    // server fault: it was answered 500 (#50).
+    throw new Refusal(415, 'unsupported file format');
+  }
+  const data = await readForDaemon(filePath);
   const { masked, findings } = maskText(data.text, { structure: formats.structureOf(filePath) });
   const out = outputPath || formats.defaultOutputPath(filePath);
   const replMap = {};
@@ -418,6 +457,9 @@ async function start(options) {
   } = options;
 
   if (!watch) throw new Error('agent-guard: --watch <dir> is required');
+  if (!isLoopbackBind(bindAddress)) {
+    throw new Error(`agent-guard: --host must be a loopback address (127.0.0.1, ::1 or localhost), not ${bindAddress}`);
+  }
   if (!fs.existsSync(watch) || !fs.statSync(watch).isDirectory()) {
     throw new Error(`agent-guard: not a directory: ${watch}`);
   }
@@ -435,7 +477,7 @@ async function start(options) {
     startedAt: Date.now(),
     findings: 0,
     files: 0,
-    lastScanAt: new Map(), // path → ms timestamp (debounce)
+    pending: new Map(), // path → { timer, firstAt, running, again } (debounce)
     timedOut: 0,
   };
   const thread = scanThread(scanTimeoutMs);
@@ -450,6 +492,7 @@ async function start(options) {
     }
   }
   let logBroken = false;
+  let stopped = false;
 
   function emit(event) {
     if (log && !logBroken) {
@@ -470,11 +513,11 @@ async function start(options) {
   // ---- Passive scanner ------------------------------------------------------
   //
   // fs.watch is best-effort across platforms:
-  //   Linux   → inotify. `recursive: true` works from Node 20 (19.1); Node 18
-  //             throws ERR_FEATURE_UNAVAILABLE_ON_PLATFORM, and we then watch
-  //             every directory of the tree ourselves. Before this, Linux only
-  //             ever watched the top level, so a secret written to
-  //             ./project/config/.env was never seen (issue #16).
+  //   Linux   → inotify, one watch per directory. We watch every directory of
+  //             the tree ourselves, skipping SKIP_DIRS (#50); recursive
+  //             fs.watch (Node 20+) would watch node_modules too. Before
+  //             issue #16, Linux only ever watched the top level, so a secret
+  //             written to ./project/config/.env was never seen.
   //   macOS   → FSEvents via recursive:true, reliable
   //   Windows → ReadDirectoryChangesW; on network drives, mapped drives (G:), or
   //             certain sandboxed paths it throws `UNKNOWN: unknown error, watch`
@@ -498,21 +541,73 @@ async function start(options) {
   let watchMode = 'off';
   let watchStrategy = null; // native | tree | poll
 
-  async function onChangeCandidate(filename) {
+  /** Size and modification time, to tell whether a file changed during a scan. */
+  function stamp(full) {
+    try {
+      const st = fs.statSync(full);
+      return `${st.size}:${st.mtimeMs}`;
+    } catch {
+      return null;
+    }
+  }
+
+  function onChangeCandidate(filename) {
     if (!filename) return;
     const full = path.isAbsolute(filename) ? filename : path.join(watch, filename);
     const relative = path.relative(watch, full);
     if (relative.split(path.sep).some((part) => SKIP_DIRS.has(part))) return;
+    schedulePassive(full, relative);
+  }
+
+  /**
+   * Scan `full` once it has been quiet for scanQuietMs -- or scanMaxWaitMs
+   * after the first unscanned change, whichever comes first. A change that
+   * arrives while the file is being scanned queues one more scan.
+   */
+  function schedulePassive(full, relative) {
+    if (stopped) return;
+    let p = state.pending.get(full);
+    if (!p) {
+      p = { timer: null, firstAt: Date.now(), running: false, again: false };
+      state.pending.set(full, p);
+    }
+    if (p.running) {
+      p.again = true;
+      return;
+    }
+    clearTimeout(p.timer);
+    const wait = Math.max(0, Math.min(DEFAULTS.scanQuietMs, p.firstAt + DEFAULTS.scanMaxWaitMs - Date.now()));
+    p.timer = setTimeout(() => runPassive(full, relative, p), wait);
+  }
+
+  async function runPassive(full, relative, p) {
+    p.timer = null;
+    p.running = true;
+    const before = stamp(full);
+    try {
+      await passiveScan(full, relative);
+    } finally {
+      p.running = false;
+      // Changed while it was being read: the result may describe the old
+      // content, so look again rather than trust it.
+      const changed = before !== null && stamp(full) !== before;
+      if ((p.again || changed) && !stopped) {
+        p.again = false;
+        p.firstAt = Date.now();
+        schedulePassive(full, relative);
+      } else {
+        state.pending.delete(full);
+      }
+    }
+  }
+
+  async function passiveScan(full, relative) {
     const why = unreadable(full);
     if (why === 'too_large') {
       emit({ kind: 'passive_skipped', path: relative, reason: why });
       return;
     }
     if (why) return; // directories, FIFOs, deleted paths
-    const now = Date.now();
-    const last = state.lastScanAt.get(full) || 0;
-    if (now - last < DEFAULTS.scanCooldownMs) return;
-    state.lastScanAt.set(full, now);
 
     try {
       const result = await thread.run('scan', full);
@@ -610,7 +705,13 @@ async function start(options) {
     degradeToPolling(null);
   } else {
     try {
-      if (FORCE_STRATEGY === 'tree') throw Object.assign(new Error('tree watching forced'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' });
+      // On Linux, recursive fs.watch puts an inotify watch on every directory
+      // -- node_modules and .git included, which are only filtered once their
+      // events arrive: about 6,000 watches for one Node project (#50). The
+      // tree strategy never watches SKIP_DIRS. macOS and Windows watch a tree
+      // with one handle, so they keep the native watcher.
+      const tree = FORCE_STRATEGY === 'tree' || (!FORCE_STRATEGY && process.platform === 'linux');
+      if (tree) throw Object.assign(new Error('tree watching'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' });
       watcher = startNativeWatch();
       watchMode = 'watch';
       watchStrategy = 'native';
@@ -794,9 +895,14 @@ async function start(options) {
         input = confineInput(root, parsed.path);
         if (req.url === '/scan') {
           const result = await thread.run('scan', input);
-          state.files++;
-          if (result.summary) state.findings += result.summary.total;
-          emit({ kind: 'api_scan', path: path.relative(root, input), findings: result.summary?.total || 0 });
+          if (result.skipped) {
+            // Not read, so not counted as scanned (#50).
+            emit({ kind: 'api_skipped', path: path.relative(root, input), reason: result.reason });
+          } else {
+            state.files++;
+            state.findings += result.summary.total;
+            emit({ kind: 'api_scan', path: path.relative(root, input), findings: result.summary.total });
+          }
           // Return COUNTS + PDPL summary — never the raw finding values,
           // even over loopback.
           send(res, 200, result.skipped ? result : { path: result.path, summary: result.summary });
@@ -851,6 +957,9 @@ async function start(options) {
     // Best-effort teardown: any of these may already have been closed by an
     // earlier error path, so guard each with try/catch. The point of stop() is
     // to leave nothing running, not to prove nothing was running.
+    stopped = true;
+    for (const p of state.pending.values()) clearTimeout(p.timer);
+    state.pending.clear();
     try { watcher.close(); } catch { /* already closed */ }
     if (poller) { try { clearInterval(poller); } catch { /* already cleared */ } }
     try {

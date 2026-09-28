@@ -16,6 +16,7 @@ const { runReporterTests } = require('./reporter.test');
 const { runI18nTests } = require('./i18n.test');
 const { runGuardTests } = require('./guard.test');
 const { runGuardRobustTests } = require('./guard-robust.test');
+const { runGuardWatchTests } = require('./guard-watch.test');
 const { runPerfTests } = require('./perf.test');
 const { runGuardianTests } = require('./guardian.test');
 const { runGuardianHygieneTests } = require('./guardian-hygiene.test');
@@ -30,6 +31,7 @@ const { runNameTests } = require('./names.test');
 const { runDocsTests } = require('./docs.test');
 const { runInstallTests } = require('./install.test');
 const { runDepsTests } = require('./deps.test');
+const { runExitCodeTests } = require('./exit-codes.test');
 
 (async () => {
   let ok = true;
@@ -51,6 +53,7 @@ const { runDepsTests } = require('./deps.test');
   ok = runI18nTests() && ok;
   ok = (await runGuardTests()) && ok;
   ok = (await runGuardRobustTests()) && ok;
+  ok = (await runGuardWatchTests()) && ok;
   ok = (await runPerfTests()) && ok;
   ok = (await runGuardianTests()) && ok;
   ok = (await runGuardianHygieneTests()) && ok;
@@ -66,6 +69,7 @@ const { runDepsTests } = require('./deps.test');
   ok = runDocsTests() && ok;
   ok = (await runInstallTests()) && ok;
   ok = (await runDepsTests()) && ok;
+  ok = (await runExitCodeTests()) && ok;
 
   console.log(ok ? '\nAll tests passed.' : '\nSome tests failed.');
   process.exit(ok ? 0 : 1);

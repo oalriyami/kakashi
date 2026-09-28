@@ -232,7 +232,8 @@ If `kakashi` is not on PATH, fall back to
   `4` BLOCK, `2` error.
 
 Exit `1` from a scan is a **detection result**, not a crash. It is what
-CI wants when a PR introduces a leak.
+CI wants when a PR introduces a leak. A usage error (an unknown option, a
+missing argument) exits `2`, never `1`.
 
 ---
 
