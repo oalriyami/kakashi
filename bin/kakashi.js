@@ -124,7 +124,8 @@ async function processFile(filePath, options, action) {
     process.exit(2);
   }
 
-  const { masked, findings } = maskText(data.text, maskOpts);
+  // The structure keeps a masked JSON, YAML, TOML, CSV or TSV file parseable (#43).
+  const { masked, findings } = maskText(data.text, { ...maskOpts, structure: formats.structureOf(filePath) });
 
   if (action === 'scan') {
     printHeader(filePath, BRAND);
@@ -291,7 +292,9 @@ program
     for (const file of files) {
       try {
         const data = await formats.readFile(file);
-        const { masked, findings } = maskText(data.text, { mode: options.mode || 'typed', valueMap, counters });
+        const { masked, findings } = maskText(data.text, {
+          mode: options.mode || 'typed', valueMap, counters, structure: formats.structureOf(file),
+        });
         if (findings.length === 0) continue;
         const outputPath = formats.defaultOutputPath(file);
         const replMap = {};
@@ -324,7 +327,23 @@ program
 // The AI agent never receives the raw rows; it only sees the masked output.
 // ---------------------------------------------------------------------------
 
+/**
+ * Run a database action. Nothing it prints may contain the connection string
+ * (#44): a string without a scheme, or an unset $DATABASE_URL, used to throw
+ * outside any handler and print a stack trace with the password in it, exit 1.
+ */
 async function runDbAction(conn, options, action) {
+  try {
+    await runDbActionUnsafe(conn, options, action);
+  } catch (err) {
+    console.error(chalk.red(`Error: ${dbEngine.redactConnection(err && err.message, conn)}`));
+    process.exit(2);
+  }
+}
+
+async function runDbActionUnsafe(conn, options, action) {
+  // Messages printed below are redacted too: driver errors can quote the URL.
+  const redact = (m) => dbEngine.redactConnection(m, conn);
   if (!options.query) {
     console.error(chalk.red('Error: --query is required'));
     process.exit(2);
@@ -337,7 +356,7 @@ async function runDbAction(conn, options, action) {
   try {
     limit = parseLimit(options.limit);
   } catch (err) {
-    console.error(chalk.red(`Error: ${err.message}`));
+    console.error(chalk.red(`Error: ${redact(err.message)}`));
     process.exit(2);
   }
 
@@ -347,7 +366,7 @@ async function runDbAction(conn, options, action) {
   try {
     stream = dbEngine.streamMasked(conn, options.query, { maskOpts, limit });
   } catch (err) {
-    console.error(chalk.red(`Error: ${err.message}`));
+    console.error(chalk.red(`Error: ${redact(err.message)}`));
     process.exit(2);
   }
 
@@ -361,7 +380,7 @@ async function runDbAction(conn, options, action) {
         for (const f of item.findings) allFindings.push(f);
       }
     } catch (err) {
-      console.error(chalk.red(`Error running query: ${err.message}`));
+      console.error(chalk.red(`Error running query: ${redact(err.message)}`));
       process.exit(2);
     }
     console.log(chalk.gray(`   ${rows} row(s) scanned`));
@@ -389,7 +408,7 @@ async function runDbAction(conn, options, action) {
   try {
     out = createWriteStreamSafe(outPath);
   } catch (err) {
-    console.error(chalk.red(`Error: ${err.message}`));
+    console.error(chalk.red(`Error: ${redact(err.message)}`));
     process.exit(2);
   }
   const outStream = out.stream;
@@ -398,6 +417,7 @@ async function runDbAction(conn, options, action) {
   const byCat = { id: 0, pii: 0, cred: 0 };
   const allFindings = [];
   const headers = [];
+  const droppedColumns = new Set();
 
   try {
     for await (const item of stream) {
@@ -418,13 +438,15 @@ async function runDbAction(conn, options, action) {
           outStream.write(headers.map(csvEscape).join(',') + '\n');
         }
         outStream.write(headers.map((h) => csvEscape(item.masked[h])).join(',') + '\n');
+        for (const k of Object.keys(item.masked || {})) if (!headers.includes(k)) droppedColumns.add(k);
       } else {
         throw new Error(`Unsupported --format: ${format} (use jsonl|json|csv)`);
       }
     }
-    if (format === 'json') outStream.write('\n]\n');
+    // An empty result is an empty array, not a lone `]` (#43).
+    if (format === 'json') outStream.write(rows === 0 ? '[]\n' : '\n]\n');
   } catch (err) {
-    console.error(chalk.red(`Error running query: ${err.message}`));
+    console.error(chalk.red(`Error running query: ${redact(err.message)}`));
     out.abort();
     process.exit(2);
   }
@@ -433,11 +455,14 @@ async function runDbAction(conn, options, action) {
   try {
     await out.finish();
   } catch (err) {
-    console.error(chalk.red(`Error writing output: ${err.message}`));
+    console.error(chalk.red(`Error writing output: ${redact(err.message)}`));
     process.exit(2);
   }
 
   if (allFindings.length > 0) recordMask(allFindings);
+  if (droppedColumns.size > 0) {
+    console.log(chalk.yellow(`\n  ${droppedColumns.size} column(s) first seen after row 1 are not in the CSV; use -f jsonl to keep them.`));
+  }
   console.log(chalk.green(`\n[ok] Masked query results saved: ${outPath}`));
   console.log(chalk.gray(`  ${rows} row(s) · ${totalFindings} replacement(s)`));
   console.log(chalk.gray(`  (${byCat.id} ID & docs, ${byCat.pii} personal info, ${byCat.cred} credentials)\n`));
@@ -447,7 +472,8 @@ async function runDbAction(conn, options, action) {
 function csvEscape(v) {
   if (v == null) return '';
   const s = typeof v === 'string' ? v : JSON.stringify(v);
-  if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  // A bare carriage return ends a row for most CSV readers too (#43).
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
   return s;
 }
 

@@ -5,6 +5,7 @@
  *   mock:customers   → yields a canned UAE customer list (5 rows)
  *   mock:empty       → yields nothing
  *   mock:leaky       → yields rows with embedded credentials
+ *   mock:typed       → yields numbers, booleans and a carriage return
  *
  * No real database required. Lets us exercise the full db-scan / db-mask /
  * db-audit CLI paths in CI without installing pg / mysql / mongodb / etc.
@@ -19,6 +20,12 @@ const CANNED = {
     { id: 5, name: 'Khalid Bin Rashid', emirates_id: '784-1980-5555555-0', email: 'khalid@example.ae', phone: '+971505678901', iban: 'AE070331234567890123460' },
   ],
   empty: [],
+  // Typed values, as SQLite and Postgres return them: numbers, booleans and
+  // text with a carriage return in it (#43).
+  typed: [
+    { id: 1, full_name: 'Ahmed Hassan', phone: 971501234567, card: 4111111111111111, note: 'first line\rsecond line', active: true },
+    { id: 2, full_name: 'Sara Ali', phone: 971502345678, card: null, note: 'ok', active: false },
+  ],
   leaky: [
     { id: 1, config: 'OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl012mno345pqr678stu', db: 'postgresql://admin:P@ssword1@prod.db.example.ae:5432/customers' },
   ],

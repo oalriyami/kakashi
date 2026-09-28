@@ -43,8 +43,9 @@ const DRIVERS = {
  * @returns {string} — driver id from DRIVERS
  */
 function inferDriver(conn) {
-  if (!conn || typeof conn !== 'string') {
-    throw new Error('Connection string is required');
+  if (!conn || typeof conn !== 'string' || !conn.trim()) {
+    // The documented call is `db-scan "$DATABASE_URL"`; unset, it is empty.
+    throw new Error('No connection string was given. If you passed $DATABASE_URL, it is not set in this shell.');
   }
   const trimmed = conn.trim();
 
@@ -64,7 +65,13 @@ function inferDriver(conn) {
   // Explicit mock (for tests)
   if (trimmed.startsWith('mock:')) return 'mock';
 
-  throw new Error(`Could not infer driver from connection string: "${trimmed.slice(0, 40)}..."`);
+  // Never echo the string: it usually holds a password (#44).
+  if (/(?:^|;)\s*(?:server|data source|host|password|pwd|user id|uid|database)\s*=/i.test(trimmed)) {
+    throw new Error('Key=value connection strings (ADO.NET, ODBC) are not supported; use a URL such as '
+      + 'postgres://user:pass@host/db. The string is not shown because it may hold a password.');
+  }
+  throw new Error('Could not tell which database this connection string is for. Expected scheme://…, '
+    + 'jdbc:<driver>://… or a .db / .sqlite file. The string is not shown because it may hold a password.');
 }
 
 /**
@@ -88,6 +95,57 @@ function loadDriver(id) {
     }
     throw err;
   }
+}
+
+/**
+ * Mask one row value by value (#43).
+ *
+ * The row used to be serialised to JSON, masked as one text and parsed back.
+ * A token in a number (`"phone": 971501234567` -> `[INTL_PHONE_1]`) made the
+ * JSON unparseable, and the row was written as `{"__masked_raw__": …}` -- or,
+ * in CSV, as empty columns -- with exit 0. Each scalar is now masked on its
+ * own, as `key: value` so that the column name still gives the patterns their
+ * context (`password: …`, `dob: …`, `full_name: …`), and only findings in the
+ * value are applied. A masked number becomes a string; everything else keeps
+ * its type.
+ *
+ * @returns {{ masked: *, findings: object[] }}
+ */
+function maskRow(row, maskOpts, valueMap, counters) {
+  const findings = [];
+  const walk = (value, key) => {
+    if (value === null || value === undefined || typeof value === 'boolean') return value;
+    if (Buffer.isBuffer(value) || value instanceof Uint8Array) return value;
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? value : walk(value.toISOString(), key);
+    if (Array.isArray(value)) return value.map((v) => walk(v, key));
+    if (typeof value === 'object') {
+      if (typeof value.toJSON === 'function') {
+        const json = value.toJSON();
+        if (json !== value) return walk(json, key);
+      }
+      const out = {};
+      for (const [k, v] of Object.entries(value)) out[k] = walk(v, k);
+      return out;
+    }
+    const str = typeof value === 'string' ? value : String(value);
+    if (!str.trim()) return value;
+    const label = key ? `${key}: ` : '';
+    const r = maskText(label + str, { ...maskOpts, valueMap, counters });
+    const mine = r.findings.filter((f) => f.offset + f.original.length > label.length);
+    if (mine.length === 0) return value;
+    let out = '';
+    let at = 0;
+    for (const f of mine) {
+      // A finding that began in the label is clipped to the value.
+      const start = Math.max(0, f.offset - label.length);
+      const end = f.offset - label.length + f.original.length;
+      out += str.slice(at, start) + f.replacement;
+      at = end;
+      findings.push({ ...f, offset: start, original: str.slice(start, end), line: 1 });
+    }
+    return out + str.slice(at);
+  };
+  return { masked: walk(row, ''), findings };
 }
 
 /**
@@ -126,21 +184,8 @@ async function* streamMasked(conn, query, options = {}) {
   for await (const row of driver.query(conn, query, { ...options, limit })) {
     if (count >= limit) break;
     count++;
-    // Serialise the row so text-based patterns can match values regardless
-    // of the DB's typed representation (e.g. UUID, Date, numeric).
-    const serialised = JSON.stringify(row, null, 2);
-    const { masked, findings } = maskText(serialised, { ...maskOpts, valueMap, counters });
-    let maskedRow;
-    try {
-      maskedRow = JSON.parse(masked);
-    } catch {
-      // Masking may replace a value inside a JSON-string context in a way
-      // that keeps it valid JSON, but a token like [SSN_1] can technically
-      // include characters that break JSON. Fall back to string mode so we
-      // still write SOMETHING masked to disk rather than silently losing data.
-      maskedRow = { __masked_raw__: masked };
-    }
-    yield { row, masked: maskedRow, findings };
+    const { masked, findings } = maskRow(row, maskOpts, valueMap, counters);
+    yield { row, masked, findings };
   }
 }
 
@@ -163,7 +208,33 @@ async function aggregate(stream) {
   return { rows, findings, byCategory };
 }
 
+/**
+ * `message` with the connection string, and the password inside it, removed
+ * (#44). Driver errors can quote either.
+ * @param {string} message
+ * @param {string} conn
+ */
+function redactConnection(message, conn) {
+  let out = String(message);
+  const c = String(conn || '').trim();
+  const secrets = [];
+  if (c.length >= 4) secrets.push(c);
+  // user:password@ in any URL-like form, and Password=…; in key=value form.
+  const userinfo = /^[^:/@\s]*:\/\/[^:/@\s]*:([^@\s]+)@/.exec(c) || /^[^:/@\s]+:([^@\s]+)@/.exec(c);
+  if (userinfo) {
+    secrets.push(userinfo[1]);
+    try { secrets.push(decodeURIComponent(userinfo[1])); } catch { /* not encoded */ }
+  }
+  for (const m of c.matchAll(/(?:password|pwd)\s*=\s*([^;]+)/gi)) secrets.push(m[1].trim());
+  for (const secret of secrets.filter((x) => x && x.length >= 3).sort((a, b) => b.length - a.length)) {
+    out = out.split(secret).join('***');
+  }
+  return out;
+}
+
 module.exports = {
+  redactConnection,
+  maskRow,
   inferDriver,
   loadDriver,
   streamMasked,

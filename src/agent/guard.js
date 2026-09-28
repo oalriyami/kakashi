@@ -386,7 +386,7 @@ async function maskFile(filePath, outputPath) {
     throw new Refusal(reason === 'too_large' ? 413 : 400, why[reason]);
   }
   const data = await formats.readFile(filePath);
-  const { masked, findings } = maskText(data.text);
+  const { masked, findings } = maskText(data.text, { structure: formats.structureOf(filePath) });
   const out = outputPath || formats.defaultOutputPath(filePath);
   const replMap = {};
   for (const f of findings) replMap[f.original] = f.replacement;

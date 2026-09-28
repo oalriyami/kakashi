@@ -66,7 +66,9 @@ flowchart TD
 - **`db-scan`** — counts + PDPL categories only. Agent-safe. Zero rows land on
   disk or in your chat.
 - **`db-mask`** — same query, but streams every row through the masker and
-  writes a safe local copy (`.jsonl` / `.json` / `.csv`).
+  writes a safe local copy (`.jsonl` / `.json` / `.csv`). Each value is
+  masked on its own, so every row stays valid; a masked number becomes a
+  string such as `"[INTL_PHONE_1]"`.
 - **`db-audit`** — verbose. Prints every original value alongside its
   replacement token. **Human-only.** Never run in agent chat.
 - **`kakashi guard <masked_file> --agent ... --task ... --destination ...`** —
@@ -309,6 +311,8 @@ crash; that is what a CI job wants when a PR introduces a new leak:
 | Query hangs / OOM on Snowflake or Databricks | You forgot `--limit`. Kill the query at the warehouse and re-run with `--limit 1000` (or lower) while you calibrate the extraction size. |
 | `mongodb+srv` DNS resolution fails | Check your DNS resolver supports `SRV` records — some corporate DNS blocks them. Try the non-SRV form of the URI. |
 | SQLite: `SQLITE_CANTOPEN` | The file path is wrong or the process lacks read permission. Confirm with `ls -la <path>` and `sqlite3 <path> ".tables"`. |
+| `No connection string was given. If you passed $DATABASE_URL, it is not set in this shell.` | Export the variable in the shell you run Kakashi from (exit code 2). |
+| `Could not tell which database this connection string is for` / `Key=value connection strings (ADO.NET, ODBC) are not supported` | Give a URL with a scheme (`postgres://user:pass@host/db`), a `jdbc:` URL, or a `.db` / `.sqlite` path. Kakashi never repeats the string in the message, because it may hold a password. |
 
 ---
 

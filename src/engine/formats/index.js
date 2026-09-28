@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const { isTextFile, readText, writeText, decodeText, CODE_EXTS, SPECIAL_FILENAMES } = require('./text');
+const { structureOf, brokenStructure } = require('./structure');
 
 let xlsxHandler;
 let docxHandler;
@@ -75,6 +76,10 @@ async function writeMasked(filePath, outputPath, data, replMap, maskedText) {
   loadHandlers();
   switch (format) {
     case 'text': {
+      // Fail closed rather than hand over a JSON file that no longer parses
+      // (#43): nothing is written.
+      const broken = brokenStructure(structureOf(filePath), data.text || '', maskedText);
+      if (broken) throw new Error(`${broken}, so it was not written`);
       const enc = { encoding: data.encoding || 'utf-8', bom: Boolean(data.bom) };
       writeText(outputPath, maskedText, enc);
       verifyRoundTrip(outputPath, maskedText, enc);
@@ -170,6 +175,7 @@ function globPatterns(recursive = false, exts = SUPPORTED_EXTS, includeFilenames
 }
 
 module.exports = {
+  structureOf,
   getFormat,
   readFile,
   writeMasked,

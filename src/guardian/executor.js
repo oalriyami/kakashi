@@ -72,7 +72,7 @@ const Executor = {
     for (const mode of modeOrder) {
       const actions = byMode.get(mode);
       const enabled = actions.flatMap((a) => [...a.patternIds]);
-      const result = maskText(text, { mode, enabled, minConfidence });
+      const result = maskText(text, { mode, enabled, minConfidence, structure: formats.structureOf(sourcePath) });
       text = result.masked;
       for (const f of result.findings) {
         // The replacement map is what the xlsx/docx/pptx writers use to patch

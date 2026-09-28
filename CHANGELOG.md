@@ -114,6 +114,35 @@ to 3.
 
 ### Fixed
 
+- **Masked JSON, YAML, TOML, CSV, TSV and database exports stay valid** (#43).
+  A replacement is now fitted to where it lands (new
+  `src/engine/formats/structure.js`, chosen by file extension):
+  - in a JSON or TOML number it becomes a string (`{"card": "[CC_1]"}`, not
+    `{"card": [CC_1]}`); inside a string it is escaped for that string;
+  - a YAML plain scalar that would start with `[` or `{` is quoted
+    (`email: '[EMAIL_1]'` instead of a list), elements of a flow list are
+    quoted one by one, and quoted scalars are escaped;
+  - a CSV field that needs it is quoted, and a value across a TSV or CSV
+    separator keeps its separators, so columns never merge;
+  - a fake that spans lines (a PEM key) replacing a one-line value stays on
+    one line, as `\n` -- raw newlines broke JSON strings and CSV rows;
+  - a masked `.json` / `.jsonl` file that no longer parses is not written
+    (fail closed).
+  Database rows are masked value by value instead of as one JSON text: a
+  token in a numeric column made the row unparseable and it was written as
+  `{"__masked_raw__": …}` (JSONL) or as empty columns (CSV) with exit 0. A
+  masked number becomes a string; other types are kept. `db-mask -f csv`
+  quotes carriage returns and says when later rows have columns the header
+  lacks, and an empty `-f json` result is `[]`. Table columns headed `first`,
+  `last`, `given`, `family` or `middle` hold names when their values are
+  listed names.
+- **Database commands never print the connection string** (#44). A string
+  without a scheme (`user:pass@host/db`), an ADO / ODBC `Server=…;Password=…`
+  string, or an empty one (an unset `$DATABASE_URL`) used to throw outside
+  any handler: a stack trace with the password in it, exit 1. Each now gets
+  a plain message that does not repeat the string, and exit 2; error
+  messages from drivers have the connection string and its password
+  removed.
 - **Identifier formats common in the Gulf are detected** (#41).
   - Arabic-Indic (٠-٩), Persian (۰-۹) and full-width (０-９) digits: patterns
     run over a same-length ASCII copy of the text, so `رقم الهوية:

@@ -1,6 +1,7 @@
 const { PATTERNS } = require('./patterns');
 const { fakeValue } = require('./fakes');
 const { meetsConfidence } = require('./name-spans');
+const { fitReplacements } = require('./formats/structure');
 
 /**
  * Characters that stand for ASCII ones in Gulf and East Asian text: the
@@ -68,6 +69,9 @@ function getReplacement(match, mode, valueMap, counters) {
  * @param {object} options
  * @param {object} [options.valueMap] - original->token map, shared across calls.
  * @param {object} [options.counters] - per-pattern token counters, shared across calls.
+ * @param {string|null} [options.structure] - the text's format (`json`, `yaml`,
+ *   `csv` … from formats/structure.js structureOf()); replacements are then
+ *   quoted and escaped so the masked text still parses.
  * @param {'low'|'medium'|'high'} [options.minConfidence] - drop findings whose
  *   pattern reports a lower confidence (today: the name patterns -- Title Case
  *   alone is 'low', the name list 'medium', a field or cue 'high'). Findings
@@ -89,6 +93,7 @@ function maskText(text, options = {}) {
     valueMap = {},
     counters = {},
     minConfidence = null,
+    structure = null,
   } = options;
 
   const whitelistSet = new Set(whitelist.map(String));
@@ -222,8 +227,14 @@ function maskText(text, options = {}) {
   let line = 1;
   let nextNewline = text.indexOf('\n'); // first newline not yet counted
   let copied = 0;                       // text is copied into `parts` up to here
+  const replacements = [];
   for (const match of resolved) {
-    const replacement = getReplacement(match, mode, valueMap, counters);
+    let replacement = getReplacement(match, mode, valueMap, counters);
+    // A fake that spans lines (a PEM key) replacing a one-line value -- a key
+    // stored with `\n` escapes in JSON or an .env file -- stays on one line
+    // the same way (#43).
+    if (!match.original.includes('\n') && replacement.includes('\n')) replacement = replacement.replace(/\r?\n/g, '\\n');
+    replacements.push({ start: match.start, end: match.end, original: match.original, replacement });
     while (nextNewline !== -1 && nextNewline < match.start) {
       line++;
       nextNewline = text.indexOf('\n', nextNewline + 1);
@@ -239,8 +250,13 @@ function maskText(text, options = {}) {
       offset: match.start,
       ...(match.confidence ? { confidence: match.confidence } : {}),
     });
-    parts.push(text.slice(copied, match.start), replacement);
-    copied = match.start + match.original.length;
+  }
+  // Each replacement is fitted to the file's structure -- quoted in a JSON
+  // number, a YAML plain scalar or a CSV field -- so the masked file still
+  // parses (#43).
+  for (const edit of fitReplacements(structure, text, replacements)) {
+    parts.push(text.slice(copied, edit.start), edit.text);
+    copied = edit.end;
   }
   parts.push(text.slice(copied));
   const masked = parts.join('');

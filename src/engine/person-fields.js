@@ -89,6 +89,12 @@ const NOT_PERSON_TOKENS = new Set([
   'البنك', 'الفرع', 'المشروع', 'الجهة', 'المؤسسة', 'الخدمة', 'التطبيق',
 ]);
 
+/**
+ * Bare name-part keys (`first`, `last`): one word each, and only a listed name
+ * counts, so `first,last` columns of dates or colours stay (#43).
+ */
+const PART_KEYS = new Set(['first', 'last', 'given', 'family', 'middle', 'forename', 'fname', 'lname']);
+
 /** Exact keys that hold logins or ids, not display names. */
 const NOT_PERSON_KEYS = new Set(['username', 'user_name', 'login', 'userid', 'user_id', 'handle']);
 
@@ -141,11 +147,12 @@ function normalizeKey(key) {
 
 /**
  * @param {string} key
- * @returns {'strong'|'weak'|null}
+ * @returns {'strong'|'weak'|'part'|null}
  */
 function classifyKey(key) {
   const n = normalizeKey(key);
   if (!n || n.length > 48) return null;
+  if (PART_KEYS.has(n)) return 'part';
   if (NOT_PERSON_KEYS.has(n)) return null;
   if (STRONG_KEYS.has(n)) return 'strong';
   const tokens = n.split('_').filter(Boolean);
@@ -251,6 +258,10 @@ function createPersonFieldDetector({ commonEn, commonAr, isOrgOrPlace, hasNameEv
       let ok;
       if (c.grade === 'strong') {
         ok = Boolean(nameWords(c.value));
+      } else if (c.grade === 'part') {
+        const words = nameWords(c.value);
+        ok = Boolean(words) && words.length <= 2 && Boolean(hasNameEvidence)
+          && words.every((w) => !isCommon(w)) && hasNameEvidence(words);
       } else {
         const r = ratio(c.key);
         if (r === null) ok = passesWeak(c.value);
