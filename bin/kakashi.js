@@ -169,7 +169,14 @@ async function processFile(filePath, options, action) {
   };
 
   if (options.stdin) {
-    const text = fs.readFileSync(0, 'utf8');
+    const input = fs.readFileSync(0);
+    try {
+      formats.assertReadableSize(input.length);
+    } catch (err) {
+      console.error(chalk.red(`Error: ${err.message}`));
+      process.exit(2);
+    }
+    const text = input.toString('utf8');
     const { masked, findings } = maskText(text, maskOpts);
     if (action === 'scan' || action === 'audit') {
       printHeader('(stdin)', BRAND);

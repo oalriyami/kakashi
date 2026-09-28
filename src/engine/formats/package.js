@@ -35,7 +35,7 @@
 
 const JSZip = require('jszip');
 const ooxml = require('./ooxml');
-const { occurrences, replaceOccurrences } = require('./replace');
+const { matcherFor, orderKeys: orderKeysOf } = require('./replace');
 
 const { WORD, DRAWING } = ooxml;
 
@@ -319,10 +319,9 @@ function maskText(xml, replMap, rule) {
   if (rule.mask === false) return xml;
   let out = ooxml.maskPart(xml, replMap, rule);
   if (rule.textNodes) {
-    const keys = orderKeys(replMap);
+    const matcher = matcherFor(replMap, { keys: orderKeys(replMap) });
     for (const v of allTextNodes(out).sort((a, b) => b.start - a.start)) {
-      let text = v.text;
-      for (const key of keys) if (text.includes(key)) text = replaceOccurrences(text, key, replMap[key]);
+      const text = matcher.replace(v.text, replMap);
       if (text !== v.text) out = out.slice(0, v.start) + ooxml.encodeXml(text) + out.slice(v.end);
     }
   }
@@ -330,7 +329,7 @@ function maskText(xml, replMap, rule) {
 }
 
 function orderKeys(replMap) {
-  return Object.keys(replMap).filter(Boolean).sort((a, b) => b.length - a.length);
+  return orderKeysOf(replMap);
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +348,59 @@ async function maskEmbedded(buf, kind, replMap) {
 }
 
 // ---------------------------------------------------------------------------
+// Opening a package. A password-protected Office file is not a zip at all but
+// an OLE compound file holding an `EncryptedPackage` stream, and JSZip's
+// "is this a zip file?" said nothing useful about it (#53).
+// ---------------------------------------------------------------------------
+
+const CFB_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+const ENCRYPTED_STREAM = Buffer.from('EncryptedPackage', 'utf16le');
+
+/** A file the reader cannot open, said in terms the user can act on. */
+class PackageError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'PackageError';
+  }
+}
+
+/** Is this an OLE compound file (a legacy Office file, or an encrypted one)? */
+function isCompoundFile(buf) {
+  return buf.length >= CFB_MAGIC.length && buf.subarray(0, CFB_MAGIC.length).equals(CFB_MAGIC);
+}
+
+/** Is this a password-protected (encrypted) Office file? */
+function isEncryptedOffice(buf) {
+  return isCompoundFile(buf) && buf.indexOf(ENCRYPTED_STREAM) !== -1;
+}
+
+const ENCRYPTED_MESSAGE = 'the file is password-protected (encrypted), so Kakashi cannot read it. '
+  + 'Remove the password (File > Info > Protect > Encrypt with Password), save, and run Kakashi again.';
+
+/**
+ * Open a .docx / .pptx / .xlsx package, or say plainly why it cannot be.
+ * @param {Buffer} buf
+ * @param {'docx'|'pptx'|'xlsx'} kind
+ * @returns {Promise<JSZip>}
+ * @throws {PackageError}
+ */
+async function openPackage(buf, kind) {
+  if (isEncryptedOffice(buf)) throw new PackageError(ENCRYPTED_MESSAGE);
+  if (isCompoundFile(buf)) {
+    const legacy = { docx: '.doc', pptx: '.ppt', xlsx: '.xls' }[kind];
+    throw new PackageError(`the file is a legacy binary Office file (${legacy}), not a .${kind} package. Save it as .${kind} and run Kakashi again.`);
+  }
+  if (buf.length < 4 || buf[0] !== 0x50 || buf[1] !== 0x4b) {
+    throw new PackageError(`the file is not a .${kind} package: it is not a zip file, whatever its name says`);
+  }
+  try {
+    return await JSZip.loadAsync(buf);
+  } catch (err) {
+    throw new PackageError(`the file is not a valid .${kind} package: the zip is damaged or incomplete (${err.message.split(':')[0].trim()})`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public API.
 // ---------------------------------------------------------------------------
 
@@ -359,7 +411,7 @@ async function maskEmbedded(buf, kind, replMap) {
  * @returns {Promise<{ text: string, unscanned: string[] }>}
  */
 async function readPackage(buf, kind) {
-  const zip = await JSZip.loadAsync(buf);
+  const zip = await openPackage(buf, kind);
   const rules = RULES[kind];
   const types = await contentTypes(zip);
   const texts = [];
@@ -460,6 +512,9 @@ async function findSurvivors(zip, kind, replMap, prefix = '') {
   // collisions in fake mode are the fake generator's to prevent.
   const keys = orderKeys(replMap).filter((k) => !String(replMap[k]).includes(k));
   const strong = keys.filter(isStrong);
+  // One pass per part for all keys (#53), not one per key.
+  const keyMatcher = matcherFor(replMap, { keys });
+  const strongMatcher = matcherFor(replMap, { keys: strong, plain: true });
   const types = await contentTypes(zip);
   const survivors = [];
 
@@ -479,10 +534,10 @@ async function findSurvivors(zip, kind, replMap, prefix = '') {
     const rule = ruleFor(rules, name, types);
     if (rule) {
       const text = verifyText(xml, rule);
-      for (const key of keys) if (occurrences(text, key).length > 0) found.add(key);
+      for (const key of keyMatcher.keysIn(text)) found.add(key);
     }
     const raw = ooxml.decodeXml(xml);
-    for (const key of strong) if (raw.includes(key)) found.add(key);
+    for (const key of strongMatcher.keysIn(raw)) found.add(key);
     if (found.size > 0) survivors.push({ part: `${prefix}${name}`, count: found.size });
   }
   return survivors;
@@ -509,9 +564,8 @@ async function finishPackage(zip, kind, replMap) {
   // above cannot see what is left of it. Read the package the way the scanner
   // does and look again.
   const { text } = await readPackage(out, kind);
-  const across = orderKeys(replMap)
-    .filter((k) => !String(replMap[k]).includes(k))
-    .filter((k) => occurrences(text, k).length > 0);
+  const acrossKeys = orderKeys(replMap).filter((k) => !String(replMap[k]).includes(k));
+  const across = [...matcherFor(replMap, { keys: acrossKeys }).keysIn(text)];
   if (across.length > 0) throw new MaskVerificationError([{ part: 'text spanning several parts', count: across.length }]);
   return out;
 }
@@ -524,7 +578,7 @@ async function finishPackage(zip, kind, replMap) {
  * @throws {MaskVerificationError}
  */
 async function maskPackage(buf, kind, replMap) {
-  const zip = await JSZip.loadAsync(buf);
+  const zip = await openPackage(buf, kind);
   await maskZip(zip, kind, replMap);
   return finishPackage(zip, kind, replMap);
 }
@@ -540,5 +594,9 @@ module.exports = {
   finishPackage,
   findSurvivors,
   MaskVerificationError,
+  PackageError,
+  openPackage,
+  isEncryptedOffice,
+  ENCRYPTED_MESSAGE,
   isStrong,
 };

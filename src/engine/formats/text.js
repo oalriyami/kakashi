@@ -85,6 +85,76 @@ const BOM = {
   'utf-16be': Buffer.from([0xfe, 0xff]),
 };
 
+// ---------------------------------------------------------------------------
+// Legacy single-byte encodings (#54). A file that is not valid UTF-8 used to
+// be read as UTF-8 anyway: every byte of a Windows-1256 CSV -- what Excel
+// saves on Arabic Windows -- became U+FFFD, the names in it were missed, and
+// the masked copy was written with every Arabic letter destroyed. Latin-1
+// accents went the same way. Such a file is now decoded as Windows-1256 or
+// Windows-1252 and written back in that encoding.
+// ---------------------------------------------------------------------------
+
+/** Single-byte encodings a file may be read in: KAKASHI_TEXT_ENCODING picks one. */
+const LEGACY_ENCODINGS = ['windows-1256', 'windows-1252', 'iso-8859-6', 'iso-8859-1', 'windows-1251', 'windows-1250'];
+
+const byteTables = new Map();
+
+/** The 256 characters of a single-byte encoding, and the way back. */
+function byteTable(encoding) {
+  if (byteTables.has(encoding)) return byteTables.get(encoding);
+  const bytes = Uint8Array.from({ length: 256 }, (_, i) => i);
+  const chars = [...new TextDecoder(encoding).decode(bytes)];
+  if (chars.length !== 256) throw new Error(`${encoding} is not a single-byte encoding`);
+  const back = new Map();
+  chars.forEach((ch, i) => { if (!back.has(ch)) back.set(ch, i); });
+  const table = { chars, back };
+  byteTables.set(encoding, table);
+  return table;
+}
+
+let isUtf8;
+try {
+  ({ isUtf8 } = require('buffer'));
+} catch { /* older Node */ }
+if (typeof isUtf8 !== 'function') {
+  const strict = new TextDecoder('utf-8', { fatal: true });
+  isUtf8 = (buf) => {
+    try { strict.decode(buf); return true; } catch { return false; }
+  };
+}
+
+/**
+ * Which single-byte encoding a non-UTF-8 file is in. Arabic words are runs of
+ * bytes above 0x7F; Latin accents sit one at a time between ASCII letters. So
+ * when most high bytes have a high-byte neighbour the text is Arabic
+ * (Windows-1256), otherwise Latin (Windows-1252, a superset of Latin-1).
+ */
+function guessLegacy(buf) {
+  const forced = String(process.env.KAKASHI_TEXT_ENCODING || '').trim().toLowerCase();
+  if (forced && LEGACY_ENCODINGS.includes(forced)) return forced;
+  let high = 0;
+  let paired = 0;
+  const n = Math.min(buf.length, 65536);
+  for (let i = 0; i < n; i++) {
+    if (buf[i] < 0x80) continue;
+    high++;
+    if ((i > 0 && buf[i - 1] >= 0x80) || (i + 1 < n && buf[i + 1] >= 0x80)) paired++;
+  }
+  return high > 0 && paired / high > 0.5 ? 'windows-1256' : 'windows-1252';
+}
+
+/**
+ * Does this look like a binary file rather than text? NUL bytes decide, as
+ * before (#36); so do many control characters, which text never has.
+ */
+function looksBinary(buf) {
+  const head = buf.subarray(0, 8192);
+  if (head.includes(0)) return true;
+  let control = 0;
+  for (const b of head) if ((b < 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d && b !== 0x0c && b !== 0x1b) || b === 0x7f) control++;
+  return head.length > 0 && control / head.length > 0.05;
+}
+
 /**
  * Work out how a text file is encoded.
  *
@@ -94,7 +164,10 @@ const BOM = {
  * with any UTF-8 BOM kept in the text so it is written back unchanged.
  *
  * @param {Buffer} buf
- * @returns {{ encoding: 'utf-8'|'utf-16le'|'utf-16be'|'utf-32', bom: boolean }}
+ * A file that is neither UTF-16 nor valid UTF-8 is a legacy single-byte
+ * encoding (see guessLegacy).
+ *
+ * @returns {{ encoding: string, bom: boolean }}
  */
 function detectEncoding(buf) {
   if (buf.length >= 4
@@ -119,6 +192,7 @@ function detectEncoding(buf) {
     if (odd / pairs > 0.3 && even / pairs < 0.05) return { encoding: 'utf-16le', bom: false };
     if (even / pairs > 0.3 && odd / pairs < 0.05) return { encoding: 'utf-16be', bom: false };
   }
+  if (!looksBinary(buf) && !isUtf8(buf)) return { encoding: guessLegacy(buf), bom: false };
   return { encoding: 'utf-8', bom: false };
 }
 
@@ -146,10 +220,30 @@ function decodeText(buf, enc = detectEncoding(buf)) {
     // binary file -- a DER key, an image renamed .txt, a database file. Read as
     // text it was scanned as noise and "masked" into a corrupted copy while
     // being reported [ok] (#36), so it is refused and reported as not read.
-    if (buf.subarray(0, 8192).includes(0)) {
-      throw new Error('the file is binary (it contains NUL bytes), so it was not read as text');
+    if (looksBinary(buf)) {
+      throw new Error('the file is binary (it contains NUL bytes or control characters), so it was not read as text');
+    }
+    // Strict: an invalid byte is an error, never a silent U+FFFD in the
+    // masked copy. detectEncoding sends non-UTF-8 text elsewhere, so this is a
+    // binary file, or one that mixes encodings.
+    if (!isUtf8(buf)) {
+      throw new Error('the file is not valid UTF-8 text (it may be binary, or mix encodings), so it was not read');
     }
     return { text: buf.toString('utf8'), encoding, bom: false };
+  }
+  if (LEGACY_ENCODINGS.includes(encoding)) {
+    if (looksBinary(buf)) {
+      throw new Error('the file is binary (it contains NUL bytes or control characters), so it was not read as text');
+    }
+    const { chars } = byteTable(encoding);
+    let text = '';
+    for (let i = 0; i < buf.length; i += 65536) {
+      const part = buf.subarray(i, i + 65536);
+      let chunk = '';
+      for (const b of part) chunk += chars[b];
+      text += chunk;
+    }
+    return { text, encoding, bom: false };
   }
 
   let body = bom ? buf.subarray(2) : buf;
@@ -174,6 +268,21 @@ function encodeText(text, enc = { encoding: 'utf-8', bom: false }) {
     let body = Buffer.from(text, 'utf16le');
     if (encoding === 'utf-16be') body = swap16(body);
     return bom ? Buffer.concat([BOM[encoding], body]) : body;
+  }
+  if (LEGACY_ENCODINGS.includes(encoding)) {
+    // Back in the file's own encoding. A replacement it cannot hold (a fake
+    // Arabic name in a Latin-1 file) is refused rather than written as `?`.
+    const { back } = byteTable(encoding);
+    const out = Buffer.allocUnsafe(text.length);
+    let n = 0;
+    for (const ch of text) {
+      const b = back.get(ch);
+      if (b === undefined) {
+        throw new Error(`the masked text has a character ${encoding} cannot hold (U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}), so it was not written`);
+      }
+      out[n++] = b;
+    }
+    return out.subarray(0, n);
   }
   return Buffer.from(text, 'utf8');
 }
@@ -202,4 +311,6 @@ module.exports = {
   detectEncoding,
   decodeText,
   encodeText,
+  looksBinary,
+  LEGACY_ENCODINGS,
 };

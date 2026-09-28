@@ -18,7 +18,7 @@
 [![license](https://img.shields.io/badge/license-MIT-B8C4D4?style=flat)](LICENSE)
 [![agents](https://img.shields.io/badge/agents-7_installed_%2B_any_shell-8A2BE2?style=flat)](#works-inside-your-agent)
 [![formats](https://img.shields.io/badge/formats-50%2B-CC0000?style=flat)](#50-file-formats)
-[![tests](https://img.shields.io/badge/tests-968_passing-4CAF50?style=flat)](tests/)
+[![tests](https://img.shields.io/badge/tests-983_passing-4CAF50?style=flat)](tests/)
 [![network calls](https://img.shields.io/badge/network_calls-zero-1C2030?style=flat)](#privacy-guarantee)
 
 **A local-first privacy engine for agentic AI.**
@@ -622,6 +622,10 @@ Kakashi reads, masks, and **reconstructs** the original format. The file you get
 
 > *A real PDF round-trip needs a heavy PDF rewriter (`pdf-lib` content-stream patching). For sharing context with Claude / ChatGPT, the masked `.md` output is what you'd want anyway.
 
+**Text encodings.** Text files are read as UTF-8, UTF-16 (with or without a byte order mark), or — when a file is not valid UTF-8 — Windows-1256 (Arabic, what Excel saves on Arabic Windows) or Windows-1252 (Latin-1), chosen from the text itself; set `KAKASHI_TEXT_ENCODING` (for example `iso-8859-6`) to decide it yourself. The masked copy is written back in the same encoding. A binary file named like text is refused (exit 2), not masked.
+
+**File size.** A file is read whole, and detection needs about 60 times its size in memory, so files over **32 MB** are refused with exit 2 and a clear message instead of running out of memory. Set `KAKASHI_MAX_FILE_MB` to raise the limit on a machine with the memory for it. A password-protected `.docx`, `.pptx` or `.xlsx` is reported as such; remove the password first.
+
 ### Source code & config — 40+ extensions
 
 ```
@@ -908,7 +912,7 @@ Patterns, formats, agents — all welcome.
 git clone https://github.com/Muhammadatef/kakashi
 cd kakashi
 npm install
-npm test        # 968 tests, offline, a few seconds
+npm test        # 983 tests, offline, a few seconds
 ```
 
 New pattern? Add to `src/engine/patterns.js` — **and classify it** in `src/guardian/classes.js`, or the drift guard fails the build.<br/>

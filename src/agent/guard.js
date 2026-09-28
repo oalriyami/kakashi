@@ -110,7 +110,8 @@ const DEFAULTS = {
   maxBodyBytes: 64 * 1024,
   // The largest file the daemon will open. Every file is read whole into
   // memory, so the cap is what stops one request from exhausting it.
-  maxFileBytes: Number(process.env.KAKASHI_GUARD_MAX_FILE_BYTES || 64 * 1024 * 1024),
+  // Defaults to the limit every reader applies (formats.maxFileBytes, #54).
+  maxFileBytes: Number(process.env.KAKASHI_GUARD_MAX_FILE_BYTES || formats.maxFileBytes()),
   // How long one scan or mask may run before it is stopped and the file is
   // reported as NOT checked (#38).
   scanTimeoutMs: Number(process.env.KAKASHI_GUARD_TIMEOUT_MS || 60 * 1000),

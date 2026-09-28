@@ -127,6 +127,39 @@ to 3.
 
 ### Fixed
 
+- **Office files: character references, encrypted files, size and speed**
+  (#53). Word and PowerPoint write some characters as numeric references --
+  `a.hassan&#64;example.com` is an address in Word -- and only the five named
+  entities were decoded, so such an address was never detected. Numeric
+  references (`&#64;`, `&#x40;`) are now decoded, in one pass, so `&amp;#64;`
+  stays the literal text it is. A password-protected `.docx`, `.pptx` or
+  `.xlsx` said "is this a zip file?"; it now says the file is
+  password-protected and how to remove the password, and a legacy `.doc` or a
+  file that is not a zip at all is named as such (all exit 2). The writers
+  searched each part once per masked value -- 20,000 addresses cost 20,000
+  passes over the part, about 5 s per part and again in every verification;
+  one shared matcher (Aho-Corasick) now finds every value in one pass, in
+  0.2 s, for .docx, .pptx and .xlsx alike. The other findings of this issue
+  were fixed earlier on this branch -- outputs are written with DEFLATE
+  (#27), and the paragraph walk is one linear pass (#38) -- and now have
+  tests: a masked `.docx` is about its input's size, and 80,000 paragraphs
+  are walked in well under a second.
+- **Text in legacy encodings is read and written back in them; binaries and
+  oversized files are refused** (#54). A file that was not valid UTF-8 was
+  read as UTF-8 anyway: a Windows-1256 Arabic CSV -- what Excel saves on
+  Arabic Windows -- lost every name to U+FFFD and was written back with every
+  Arabic letter destroyed, and Latin-1 accents went the same way. UTF-8 is
+  now checked strictly, and a file that fails is read as Windows-1256 (runs
+  of high bytes: Arabic) or Windows-1252 (isolated high bytes: Latin), and
+  masked back into the same encoding byte for byte; `KAKASHI_TEXT_ENCODING`
+  chooses one explicitly. A replacement the encoding cannot hold is refused
+  rather than written as `?`. A binary file without NUL bytes grew from 5 KB
+  to 9 KB and was reported `[ok]`; files with control characters are now
+  refused as binary. A 200 MB file needed 4 GB of memory and killed the
+  process (exit 134): files over 32 MB (`KAKASHI_MAX_FILE_MB`) are refused
+  before they are read, with exit 2, in every command -- `--stdin`, `guard`
+  and `scan-dir` (which lists the file as unread) included. agent-guard's
+  default limit is the same.
 - **Folder commands read ignore files as git does, and agree on what to
   look at** (#51). `.kakashiignore` and `.gitignore` lines were translated by
   hand into glob patterns: `b/` and `*.log` matched only at the top level

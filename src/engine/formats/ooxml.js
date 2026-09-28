@@ -42,7 +42,7 @@
  * `&` is matched as `&` rather than as `&amp;`.
  */
 
-const { occurrences, replaceOccurrences } = require('./replace');
+const { matcherFor, orderKeys: orderKeysOf } = require('./replace');
 
 /**
  * Run grammar for WordprocessingML (document body, headers, footers, notes,
@@ -77,19 +77,24 @@ const DRAWING = {
   marks: [{ rx: '<a:br\\b[^<>]*?>', text: '\n' }],
 };
 
-const ENTITIES = [
-  [/&amp;/g, '&'],
-  [/&lt;/g, '<'],
-  [/&gt;/g, '>'],
-  [/&quot;/g, '"'],
-  [/&apos;/g, "'"],
-];
+const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 
-/** Decode the five predefined XML entities. `&amp;` must be decoded last. */
+/**
+ * Decode XML character references: the five predefined entities, and numeric
+ * references -- `&#64;` and `&#x40;` are both `@`. Numeric references were
+ * left as they were, so `a.hassan&#64;example.com`, which Word shows as an
+ * address, was not detected (#53). One pass, so `&amp;#64;` stays the literal
+ * text `&#64;`. A reference to a character XML does not allow is kept as
+ * written.
+ */
 function decodeXml(s) {
-  let out = s;
-  for (let i = ENTITIES.length - 1; i >= 0; i--) out = out.replace(ENTITIES[i][0], ENTITIES[i][1]);
-  return out.replace(/&amp;/g, '&');
+  return s.replace(/&(?:#(\d{1,7})|#x([0-9a-fA-F]{1,6})|(amp|lt|gt|quot|apos));/g, (whole, dec, hex, name) => {
+    if (name) return NAMED_ENTITIES[name];
+    const cp = dec !== undefined ? Number(dec) : parseInt(hex, 16);
+    const allowed = cp === 0x9 || cp === 0xa || cp === 0xd
+      || (cp >= 0x20 && cp <= 0xd7ff) || (cp >= 0xe000 && cp <= 0xfffd) || (cp >= 0x10000 && cp <= 0x10ffff);
+    return allowed ? String.fromCodePoint(cp) : whole;
+  });
 }
 
 /** Encode text for an XML text node. `&` must be encoded first. */
@@ -100,9 +105,9 @@ function encodeXml(s) {
     .replace(/>/g, '&gt;');
 }
 
-/** Encode text for a double-quoted XML attribute value. */
+/** Encode text for an XML attribute value, whichever quote delimits it. */
 function encodeAttr(s) {
-  return encodeXml(s).replace(/"/g, '&quot;');
+  return encodeXml(s).replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -248,23 +253,10 @@ function extractText(xml, spec) {
  * @returns {Array<{ start, end, replacement }>} sorted by start, non-overlapping
  */
 function findSpans(text, orderedKeys, replMap) {
-  const spans = [];
-  const claimed = new Uint8Array(text.length);
-  for (const key of orderedKeys) {
-    if (!key) continue;
-    // Whole words only for name-like values (see ./replace.js).
-    for (const at of occurrences(text, key)) {
-      const end = at + key.length;
-      let clashes = false;
-      for (let i = at; i < end; i++) {
-        if (claimed[i]) { clashes = true; break; }
-      }
-      if (clashes) continue;
-      claimed.fill(1, at, end);
-      spans.push({ start: at, end, replacement: replMap[key] });
-    }
-  }
-  return spans.sort((a, b) => a.start - b.start);
+  // One pass over the text for all keys (./replace.js KeyMatcher, #53); whole
+  // words only for name-like values.
+  return matcherFor(replMap, { keys: orderedKeys.filter(Boolean) }).spans(text)
+    .map((s) => ({ start: s.start, end: s.end, replacement: replMap[s.key] }));
 }
 
 /**
@@ -331,7 +323,7 @@ function rewriteRuns(runs, spans) {
 
 /** Longest key first; see findSpans. */
 function orderKeys(replMap) {
-  return Object.keys(replMap).filter(Boolean).sort((a, b) => b.length - a.length);
+  return orderKeysOf(replMap);
 }
 
 /**
@@ -480,11 +472,9 @@ function maskPart(xml, replMap, rule) {
     ...findAttributes(out, rule.attrs),
   ].sort((a, b) => b.start - a.start);
 
+  const matcher = matcherFor(replMap, { keys: orderedKeys });
   for (const v of values) {
-    let text = v.text;
-    for (const key of orderedKeys) {
-      if (text.includes(key)) text = replaceOccurrences(text, key, replMap[key]);
-    }
+    const text = matcher.replace(v.text, replMap);
     if (text === v.text) continue;
     out = out.slice(0, v.start) + (v.attr ? encodeAttr(text) : encodeXml(text)) + out.slice(v.end);
   }

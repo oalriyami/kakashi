@@ -25,11 +25,40 @@ function getFormat(filePath) {
   return null;
 }
 
+/**
+ * The largest file read whole, in bytes. Detection holds the file, its text
+ * and every finding in memory at once -- about 60 times the file's size -- so
+ * a 200 MB file needed 4 GB and killed the process (exit 134, not 2) once the
+ * heap ran out (#54). Past this size a file is refused with a clear error.
+ * KAKASHI_MAX_FILE_MB raises or lowers it.
+ */
+function maxFileBytes() {
+  const mb = Number(process.env.KAKASHI_MAX_FILE_MB);
+  return (Number.isFinite(mb) && mb > 0 ? mb : 32) * 1024 * 1024;
+}
+
+class FileTooLargeError extends Error {
+  constructor(size, limit) {
+    const mb = (n) => `${(n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+    super(`the file is ${mb(size)}, larger than the ${mb(limit)} Kakashi reads at once (it needs about 60 times the file's size in memory). `
+      + 'Split the file, or set KAKASHI_MAX_FILE_MB if this machine has the memory.');
+    this.name = 'FileTooLargeError';
+    this.code = 'KAKASHI_TOO_LARGE';
+  }
+}
+
+/** Throw FileTooLargeError when `size` bytes is over the limit. */
+function assertReadableSize(size) {
+  const limit = maxFileBytes();
+  if (size > limit) throw new FileTooLargeError(size, limit);
+}
+
 async function readFile(filePath) {
   const format = getFormat(filePath);
   if (!format) {
     throw new Error(`Unsupported file format: ${path.extname(filePath) || path.basename(filePath)}`);
   }
+  assertReadableSize(fs.statSync(filePath).size);
   loadHandlers();
   switch (format) {
     case 'text':
@@ -175,6 +204,9 @@ function globPatterns(recursive = false, exts = SUPPORTED_EXTS, includeFilenames
 }
 
 module.exports = {
+  maxFileBytes,
+  assertReadableSize,
+  FileTooLargeError,
   structureOf,
   getFormat,
   readFile,

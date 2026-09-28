@@ -301,8 +301,9 @@ resolved; `output` must be a new file there. Requests with an `Origin` header
 or a Host other than `127.0.0.1`, `localhost` or `[::1]` are refused, so a web
 page cannot reach the API, even through DNS rebinding.
 
-Bodies over 64 KB are refused with 413, and only regular files up to 64 MB
-(`KAKASHI_GUARD_MAX_FILE_BYTES`) are opened: `/scan` reports others as
+Bodies over 64 KB are refused with 413, and only regular files up to the
+limit every reader applies (32 MB, `KAKASHI_MAX_FILE_MB`; or
+`KAKASHI_GUARD_MAX_FILE_BYTES` for the daemon alone) are opened: `/scan` reports others as
 `skipped` with a `reason`, and `/mask` refuses them. Scans and masks run one at
 a time on a worker thread. One that runs past the limit (`--scan-timeout`,
 `KAKASHI_GUARD_TIMEOUT_MS`, default 60 000 ms) is stopped and answered

@@ -9,7 +9,7 @@
  */
 const JSZip = require('jszip');
 const pkg = require('./package');
-const { occurrences, replaceOccurrences } = require('./replace');
+const { matcherFor, orderKeys } = require('./replace');
 
 let XLSX = null;
 /** SheetJS, or a clear error saying how to install it. */
@@ -111,12 +111,10 @@ async function readXlsxBuffer(buf) {
 function makeMasker(replMap) {
   // Longest first, so a short value that is a substring of a longer one cannot
   // claim the text before the longer match fires.
-  const keys = Object.keys(replMap).filter(Boolean).sort((a, b) => b.length - a.length);
+  const matcher = matcherFor(replMap, { keys: orderKeys(replMap) });
   return (s) => {
     if (typeof s !== 'string' || !s) return s;
-    let out = s;
-    for (const key of keys) if (out.includes(key)) out = replaceOccurrences(out, key, replMap[key]);
-    return out;
+    return matcher.replace(s, replMap);
   };
 }
 
@@ -245,7 +243,7 @@ async function maskXlsxBuffer(buf, replMap, bookType = 'xlsx') {
   // Legacy binary workbooks cannot be inspected part by part; read the result
   // back through SheetJS and check what it sees.
   const { text } = await readXlsxBuffer(out);
-  const left = Object.keys(replMap).filter((k) => k && occurrences(text, k).length > 0);
+  const left = [...matcherFor(replMap, { keys: orderKeys(replMap) }).keysIn(text)];
   if (left.length > 0) throw new pkg.MaskVerificationError([{ part: 'workbook', count: left.length }]);
   return out;
 }

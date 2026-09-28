@@ -19,7 +19,7 @@ const pkg = require('./package');
 const ooxml = require('./ooxml');
 const legacy = require('./xlsx-legacy');
 const { writeFileSafe } = require('../../lib/safe-write');
-const { occurrences, replaceOccurrences } = require('./replace');
+const { matcherFor, orderKeys } = require('./replace');
 
 /**
  * Cells within a row are joined with this separator for detection. No pattern
@@ -288,6 +288,8 @@ function isOoxmlWorkbook(zip) {
  * @returns {Promise<{ text: string, cells: object, unscanned: string[] }>}
  */
 async function readXlsxBuffer(buf) {
+  // An encrypted workbook is a compound file too, but not a legacy .xls (#53).
+  if (pkg.isEncryptedOffice(buf)) throw new pkg.PackageError(pkg.ENCRYPTED_MESSAGE);
   if (!isZip(buf)) return legacy.readXlsxBuffer(buf);
   const zip = await JSZip.loadAsync(buf);
   if (!isOoxmlWorkbook(zip)) return legacy.readXlsxBuffer(buf); // .xlsb: binary parts
@@ -321,13 +323,11 @@ async function readXlsx(filePath) {
 
 function makeMasker(replMap) {
   // Longest first, so a short value that is a substring of a longer one cannot
-  // claim the text before the longer match fires.
-  const keys = Object.keys(replMap).filter(Boolean).sort((a, b) => b.length - a.length);
+  // claim the text before the longer match fires; one pass for all keys (#53).
+  const matcher = matcherFor(replMap, { keys: orderKeys(replMap) });
   return (s) => {
     if (typeof s !== 'string' || !s) return s;
-    let out = s;
-    for (const key of keys) if (out.includes(key)) out = replaceOccurrences(out, key, replMap[key]);
-    return out;
+    return matcher.replace(s, replMap);
   };
 }
 
@@ -431,6 +431,7 @@ function maskSheet(xml, sst, mask, view) {
  * @throws {pkg.MaskVerificationError}
  */
 async function maskXlsxBuffer(buf, replMap, bookType = 'xlsx') {
+  if (pkg.isEncryptedOffice(buf)) throw new pkg.PackageError(pkg.ENCRYPTED_MESSAGE);
   if (!isZip(buf) || (bookType !== 'xlsx' && bookType !== 'xlsm')) return legacy.maskXlsxBuffer(buf, replMap, bookType);
   const zip = await JSZip.loadAsync(buf);
   if (!isOoxmlWorkbook(zip)) return legacy.maskXlsxBuffer(buf, replMap, bookType);
@@ -471,7 +472,8 @@ async function maskXlsxBuffer(buf, replMap, bookType = 'xlsx') {
 
   // And the cells, read back the way the scanner reads them.
   const { text } = await readXlsxBuffer(out);
-  const left = Object.keys(replMap).filter((k) => k && !String(replMap[k]).includes(k) && occurrences(text, k).length > 0);
+  const checkKeys = orderKeys(replMap).filter((k) => !String(replMap[k]).includes(k));
+  const left = [...matcherFor(replMap, { keys: checkKeys }).keysIn(text)];
   if (left.length > 0) throw new pkg.MaskVerificationError([{ part: 'workbook cells', count: left.length }]);
   return out;
 }
