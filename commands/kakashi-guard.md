@@ -48,9 +48,12 @@ release-authority component and it never self-approves.
      Never substitute the original path.
    - `3`  REQUIRE_APPROVAL → stop and ask a human. Do NOT proceed.
    - `4`  BLOCK → do not release; do not offer a "smaller" release.
-   - `2`  error → fail closed; the safe answer is not to release.
+   - `2`  error → fail closed; the safe answer is not to release. With
+     `--json` the error is JSON too: `decision` is `null` and `error.code`
+     names it.
 6. If the caller wants a human-terminal transcript instead of JSON, offer
-   `kakashi guard <file> --trace` (agent-unsafe — for local review only).
+   the same command without `--json` (the default report, for a local
+   terminal).
 
 ## Why Guardian and not just mask
 

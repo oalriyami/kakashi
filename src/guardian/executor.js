@@ -67,6 +67,7 @@ const Executor = {
     let text = data.text;
     const replMap = {};
     const byClass = {};
+    const byCategory = {};
     let replacementCount = 0;
 
     for (const mode of modeOrder) {
@@ -83,6 +84,7 @@ const Executor = {
         if (!byClass[cls]) byClass[cls] = { transformed: 0, tool: null };
         byClass[cls].transformed += 1;
         byClass[cls].tool = actions.find((a) => a.patternIds.includes(f.id)).tool;
+        byCategory[f.cat] = (byCategory[f.cat] || 0) + 1;
         replacementCount += 1;
       }
     }
@@ -93,6 +95,8 @@ const Executor = {
       artifactPath,
       replacementCount,
       byClass,
+      // id / pii / cred counts, for the cumulative stats `kakashi stats` shows.
+      byCategory,
       // Audit-safe: the actions applied, never the values they applied to.
       actions: plan.actions.map((a) => a.toJSON()),
       passes: modeOrder.length,

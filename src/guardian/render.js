@@ -223,7 +223,8 @@ function actSection(execResult, iteration, total) {
   }
   const rc = execResult.replacementCount || 0;
   const byClass = execResult.byClass && Object.keys(execResult.byClass).length
-    ? '   (' + Object.entries(execResult.byClass).map(([c, n]) => `${c} x${n}`).join(', ') + ')'
+    // byClass holds { transformed, tool } per class (executor.js).
+    ? '   (' + Object.entries(execResult.byClass).map(([c, n]) => `${c} x${n.transformed}`).join(', ') + ')'
     : '';
   lines.push(chalk.gray(`   Wrote scratch artifact with ${rc} replacement(s).${byClass}`));
   lines.push(chalk.gray('   The artifact is not promoted to the output path until VERIFY passes.'));
@@ -279,6 +280,15 @@ function decisionSection(result) {
     if (result.decision === 'ALLOW') {
       lines.push(chalk.gray('   Original released unchanged — no transformation was necessary.'));
     }
+    lines.push('');
+  }
+
+  if (result.staleArtifactRemoved && result.decision !== 'ALLOW_WITH_TRANSFORMATION') {
+    lines.push(chalk.gray('   Removed the artifact an earlier run left at the output path: it does not apply to this decision.'));
+    lines.push('');
+  }
+  if (result.staleOutputKept) {
+    lines.push(chalk.yellow('   A file from before this run is still at the output path. It was not written or checked by this run -- do not release it.'));
     lines.push('');
   }
 

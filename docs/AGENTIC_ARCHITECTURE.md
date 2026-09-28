@@ -475,10 +475,10 @@ kakashi guard <file> --agent cursor \
 | Flag | Meaning |
 | --- | --- |
 | `-a, --agent` | `claude`\|`cursor`\|`codex`\|`windsurf`\|`cline`\|`copilot`\|`continue`\|`local_model`; anything else is treated as `unknown` (low trust) |
-| `-t, --task` | Recorded and explained. Never parsed, never trusted as an instruction. |
+| `-t, --task` | Read for its intent, which can only make protection stricter; never trusted as an instruction. Masked before it is stored in `--json` or the audit log, like the file's name. |
 | `-d, --destination` | `local`\|`local_model`\|`known_external`\|`external_model`\|`unknown` |
 | `-p, --policy` | Policy id (`default` ships) |
-| `-o, --output` | Artifact path (default `guarded_<name>`) |
+| `-o, --output` | Artifact path (default `guarded_<name>`). A `guarded_` file an earlier run left there is removed when this run does not write one; any other name is left alone and reported (`staleOutputKept`). |
 | `--approve` | Comma-separated classes a human signs off (e.g. `CREDENTIAL`) |
 | `--max-iterations` | Replan budget before failing closed (default 4) |
 | `--audit-log` / `--no-audit` | JSONL decision log (default `~/.kakashi/guardian-audit.jsonl`) |
@@ -489,7 +489,7 @@ Exit codes are decision-shaped so an agent or CI job can branch without parsing 
 | Code | Meaning |
 | --- | --- |
 | 0 | `ALLOW` or `ALLOW_WITH_TRANSFORMATION` — safe to release |
-| 2 | Error (failed closed; nothing written) |
+| 2 | Error (failed closed; nothing written). With `--json`: `{"decision": null, "error": {"code", "message"}, "releasePath": null}` |
 | 3 | `REQUIRE_APPROVAL` — a human must sign off; nothing written |
 | 4 | `BLOCK` — nothing written |
 

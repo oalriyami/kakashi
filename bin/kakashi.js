@@ -12,7 +12,7 @@ const { maskText } = require('../src/engine/masker');
 const { PATTERNS } = require('../src/engine/patterns');
 const formats = require('../src/engine/formats');
 const { printHeader, printFindings } = require('../src/lib/output');
-const { loadStats, recordMask, impactSnapshot } = require('../src/lib/stats');
+const { loadStats, recordMask, recordCounts, impactSnapshot } = require('../src/lib/stats');
 const dbEngine = require('../src/engine/db');
 const { scanDirectory } = require('../src/lib/scan-dir');
 const reporter = require('../src/lib/reporter');
@@ -649,10 +649,26 @@ program
     const { runGuardian } = require('../src/guardian');
     const { renderRun } = require('../src/guardian/render');
 
+    // Exit 2, and with --json an object an agent can parse rather than a line
+    // of text (#48). The message is masked: it can quote the file's path, or a
+    // format reader's complaint about the file's contents.
+    const fail = (code, message) => {
+      const safe = maskText(String(message), { minConfidence: 'medium' }).masked;
+      if (options.json) {
+        console.log(JSON.stringify({
+          decision: null,
+          error: { code, message: safe },
+          releasePath: null,
+        }, null, 2));
+      } else {
+        console.error(chalk.red(`Error: ${safe}`));
+      }
+      process.exit(2);
+    };
+
     const maxIterations = parseInt(options.maxIterations, 10);
     if (!Number.isInteger(maxIterations) || maxIterations < 1) {
-      console.error(chalk.red('Error: --max-iterations must be a positive integer'));
-      process.exit(2);
+      fail('INVALID_ARGUMENT', '--max-iterations must be a positive integer');
     }
 
     let result;
@@ -670,8 +686,15 @@ program
       });
     } catch (err) {
       // Fail closed: no artifact was written and nothing was released.
-      console.error(chalk.red(`Error: ${err.message}`));
-      process.exit(2);
+      fail('GUARDIAN_FAILED', err.message);
+    }
+
+    if (result.decision === 'ALLOW_WITH_TRANSFORMATION') {
+      // Counted like `kakashi mask`: the released copy's replacements.
+      const last = result.state.toolResults[result.state.toolResults.length - 1];
+      if (last && last.replacementCount > 0) {
+        recordCounts({ total: last.replacementCount, byCategory: last.byCategory });
+      }
     }
 
     if (options.json) {
@@ -694,6 +717,10 @@ program
         // Embedded objects that could not be read. Above zero, "no findings"
         // does not mean the file is clean.
         unscannedParts: result.observation ? result.observation.unscannedParts || 0 : 0,
+        // An earlier run's guarded_ file was removed from the output path; or a
+        // file under another name is still there, and was not written by this run.
+        staleArtifactRemoved: result.staleArtifactRemoved,
+        staleOutputKept: result.staleOutputKept,
         event: result.auditEvent,
       }, null, 2));
     } else {

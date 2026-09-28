@@ -2,7 +2,7 @@
  * Observation -- the Guardian's senses.
  *
  * This module adds NO detection capability. It runs the existing Kakashi
- * detector (`maskText` over all 35 patterns) and the existing compliance
+ * detector (`maskText` over every pattern) and the existing compliance
  * enrichment (`pdpl.summarize`) and then projects the result onto the Guardian's
  * reasoning vocabulary: classes, counts, severities, PDPL articles.
  *
@@ -105,7 +105,7 @@ async function observe(resolvedPath, opts = {}) {
   const observation = new Observation({
     kind: opts.kind || 'resource',
     resourceType: format,
-    resourceName: nodePath.basename(resolvedPath),
+    resourceName: maskedFileName(nodePath.basename(resolvedPath)),
     totalFindings: summary.total,
     maxSeverity: summary.total > 0 ? maxSeverity : 'none',
     classes,
@@ -122,4 +122,17 @@ async function observe(resolvedPath, opts = {}) {
   return { observation, text: data.text, data };
 }
 
-module.exports = { observe, Observation, projectClasses, SEVERITY_RANK };
+/**
+ * A file name as the Guardian may keep it. Names carry PII too
+ * ("payslip_ahmed.hassan@example.com.pdf"), and this one is copied into --json
+ * and the audit log (#48). The extension is set aside first: an address that
+ * runs into ".pdf" does not read as one.
+ */
+function maskedFileName(base) {
+  const ext = nodePath.extname(base);
+  const stem = ext && ext.length < base.length ? base.slice(0, -ext.length) : base;
+  const masked = maskText(stem, { minConfidence: 'medium' }).masked;
+  return stem === base ? masked : masked + ext;
+}
+
+module.exports = { observe, maskedFileName, Observation, projectClasses, SEVERITY_RANK };

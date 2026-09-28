@@ -112,4 +112,17 @@ function defaultArtifactPath(resourcePath) {
   return path.join(dir, `guarded_${base}`);
 }
 
-module.exports = { resolveResource, resolveOutput, defaultArtifactPath };
+/**
+ * Is this file named the way the Guardian names its artifacts (`guarded_<name>`,
+ * or `<name>_guarded.md` for a PDF)? Only such a file is the Guardian's to
+ * remove when a later run does not release it (#48). Any other `--output`
+ * path may be anything the caller chose, and is never deleted.
+ * @param {string} p
+ * @returns {boolean}
+ */
+function isGuardianArtifactName(p) {
+  const base = path.basename(p);
+  return base.startsWith('guarded_') || /_guarded\.md$/i.test(base);
+}
+
+module.exports = { resolveResource, resolveOutput, defaultArtifactPath, isGuardianArtifactName };

@@ -404,7 +404,7 @@ GitHub Actions example:
 | 1.2.0 | 2026-09-18 | The Guardian: autonomous release decisions (observe → assess → plan → policy → act → verify → replan), task understanding, value-free audit log |
 | 1.3.0 | 2026-09-23 | `/kakashi` orchestrator picks the tool from intent; 14 commands; agent-guard degrades to polling on Windows |
 | 1.3.1 | 2026-09-23 | `/kakashi` works in agents without native slash commands |
-| **Unreleased** | | **Names by field and column; quoted-key secrets; Luhn, Emirates ID and all-country IBAN checks; linear-time masking; distinct fakes and consistent tokens across files; recursive agent-guard watching on Linux; 8 more credential formats and E.164 phone numbers; a local name list for Arabic prose, greetings and repeated names, with confidence levels; a lighter repository. See [CHANGELOG.md](../CHANGELOG.md).** |
+| 1.4.0 | 2026-09-28 | 47 patterns, twelve more than 1.3.1: names by field, column and context, Gulf identifiers, all-country IBANs, credentials in URLs; every Office part read and masked; structured exports stay valid; no writes through links; Guardian keeps no task values and no stale artifact; no driver or open advisory on a default install. See [CHANGELOG.md](../CHANGELOG.md). |
 
 ---
 

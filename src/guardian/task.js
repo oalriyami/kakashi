@@ -33,6 +33,7 @@
  */
 
 const { CLASSES } = require('./classes');
+const { maskText } = require('../engine/masker');
 const { TOOLS, TRANSFORM_LADDER } = require('./actions');
 
 /**
@@ -227,7 +228,30 @@ const INTENTS = {
 const MAX_TASK_CHARS = 500;
 
 /**
- * Strip a caller-supplied task string down to something safe to print, store and
+ * How much of a long task is masked before it is cut to MAX_TASK_CHARS. A
+ * replacement token is usually shorter than what it replaces, so the masked
+ * text needs more input than it will keep; the bound stops a megabyte-long
+ * `--task` from costing a megabyte-long scan.
+ */
+const MASK_WINDOW = MAX_TASK_CHARS * 4;
+
+/** Control characters out, whitespace collapsed. No cap. */
+function cleanTask(raw) {
+  if (raw == null) return null;
+  const text = String(raw)
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text || null;
+}
+
+function cap(text) {
+  return text.length > MAX_TASK_CHARS ? `${text.slice(0, MAX_TASK_CHARS)}…` : text;
+}
+
+/**
+ * Strip a caller-supplied task string down to something safe to print and
  * match against. Control characters go (a task is a label, not a terminal escape
  * sequence), whitespace collapses, and the result is capped.
  *
@@ -236,14 +260,25 @@ const MAX_TASK_CHARS = 500;
  * because the string was cleaned.
  */
 function sanitizeTask(raw) {
-  if (raw == null) return null;
-  const text = String(raw)
-    // eslint-disable-next-line no-control-regex
-    .replace(/[ --]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!text) return null;
-  return text.length > MAX_TASK_CHARS ? `${text.slice(0, MAX_TASK_CHARS)}…` : text;
+  const text = cleanTask(raw);
+  return text ? cap(text) : null;
+}
+
+/**
+ * The task as it may be stored: in the analysis, the `--json` output and the
+ * audit log. A task is free text, and people write the thing they are asking
+ * about into it ("summarise the complaint from a.hassan@example.com"), so it is
+ * masked with the same engine as the file before anything keeps it (#48).
+ * The text is cut at a word boundary before masking, so a value straddling the
+ * cut cannot survive as an unmasked fragment. Names count from 'medium' up (a
+ * listed name, a field, a cue): a Title Case phrase alone is how people write
+ * a task ("Summarise Customer Complaints"), not a person.
+ */
+function storableTask(clean) {
+  let text = clean;
+  if (text.length > MASK_WINDOW) text = text.slice(0, MASK_WINDOW).replace(/\S*$/, '').trimEnd();
+  const { masked } = maskText(text, { minConfidence: 'medium' });
+  return cap(masked);
 }
 
 /** Split into comparable word tokens across scripts (Latin, Arabic, digits). */
@@ -319,12 +354,15 @@ class TaskAnalysis {
  * @returns {TaskAnalysis}
  */
 function analyze(rawTask) {
-  const task = sanitizeTask(rawTask);
-  if (!task) {
+  const clean = cleanTask(rawTask);
+  if (!clean) {
     return new TaskAnalysis({ task: null, intent: null, matched: [], needs: {}, recognised: false });
   }
 
-  const words = new Set(tokenize(task));
+  // Intent is read from the text as written (only fixed keywords come out of
+  // it); what is kept is the masked text.
+  const words = new Set(tokenize(cap(clean)));
+  const task = storableTask(clean);
   let best = null;
   let bestHits = [];
 
@@ -381,13 +419,14 @@ function assertNonWeakening(preference, permitted) {
   };
 }
 
-const TaskAnalyzer = { analyze, sanitizeTask, assertNonWeakening };
+const TaskAnalyzer = { analyze, sanitizeTask, storableTask, assertNonWeakening };
 
 module.exports = {
   TaskAnalyzer,
   TaskAnalysis,
   analyze,
   sanitizeTask,
+  storableTask,
   assertNonWeakening,
   NEEDS,
   INTENTS,

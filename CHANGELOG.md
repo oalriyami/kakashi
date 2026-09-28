@@ -8,6 +8,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-09-28
+
+**Detection, formats and safety release.** 1.3.1 shipped 35 patterns; 1.4.0
+ships 47, reads and writes every part of Office files, keeps structured
+exports valid after masking, and closes the safety findings of the September
+2026 QA pass (#2). Detection behaviour changes -- more is found, and fewer
+everyday words, places and hashes are taken for names or secrets -- so masked
+output from 1.3.x and 1.4.0 can differ on the same file.
+
 **Name detection, phase 1: read the structure first.** Names were found only
 when written in Title Case (Latin) or as any run of Arabic words, so names in
 capitals, lower case or on their own were missed, while places, products and
@@ -93,6 +102,10 @@ to 3.
 
 ### Changed
 
+- **Version 1.4.0** (#47). npm still served 1.3.1 (35 patterns) while the
+  repository reported the same version with different detection. The README
+  version badge now reads the published version from npm instead of a
+  hard-coded number, and the upgrade steps compare against it.
 - **Spreadsheets are read one row per line**, cells joined by ` | `, so the
   header row labels each column. No pattern can match across the separator,
   so every finding stays inside one cell.
@@ -114,6 +127,12 @@ to 3.
 
 ### Fixed
 
+- **Guardian's report, errors and stats** (#48). The human report printed
+  `PERSON_NAME x[object Object]` for each transformed class; it prints the
+  count. `guard --json` printed errors as plain text on stderr; it now prints
+  `{"decision": null, "error": {"code", "message"}, "releasePath": null}`
+  (exit 2), with the message masked. A guard run that writes a transformed
+  copy is counted in `kakashi stats` like `kakashi mask`.
 - **The installers and uninstall work as documented** (#45).
   - `curl … | bash` stopped at `BASH_SOURCE[0]: unbound variable` and fell back
     to a command the CLI rejects, so no rules were installed; `install.ps1`
@@ -570,6 +589,24 @@ to 3.
     Databricks and current MongoDB clients need Node 20 or later.
   - The lockfile takes `brace-expansion` 2.1.7 (the glob advisory), and CI
     installs with `npm ci`, which the old snowflake-sdk tree made impossible.
+- **Guardian keeps no values from the task or the file name, and no stale
+  artifact** (#48).
+  - `--task` was copied verbatim into `--json` and
+    `~/.kakashi/guardian-audit.jsonl`, and people write the values they ask
+    about into it. It is now masked with the same engine before anything keeps
+    it (`summarise the rows for [EMAIL_1]`); its intent is still read from the
+    text as written. A long task is cut at a word boundary before masking, so
+    a value across the length limit cannot survive as a fragment. The file's
+    name is masked the same way (`payroll_[EMAIL_1].csv`).
+  - A `guarded_<file>` from an earlier ALLOW stayed on disk after a later
+    REQUIRE_APPROVAL or BLOCK, beside a decision that said nothing was
+    written. Guardian now removes a file carrying its own naming from the
+    output path before each run. An `--output` under any other name is never
+    deleted; the report and `--json` (`staleOutputKept`) say it is still
+    there and was not written by this run.
+  - Ctrl-C (or SIGTERM / SIGHUP) during a run left the partially-protected
+    scratch copy in the OS temp folder. The scratch folder is now removed on
+    those signals, and the process still ends on the signal.
 
 ## [1.3.1] — 2026-09-23
 

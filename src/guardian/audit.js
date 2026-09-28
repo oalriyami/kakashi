@@ -7,7 +7,9 @@
  * shape, written under the same ~/.kakashi directory the stats file already uses.
  *
  * SAFETY INVARIANT: an audit event is assembled exclusively from class names,
- * pattern ids, tool names, reason codes and integer counts. Every object it
+ * pattern ids, tool names, reason codes and integer counts -- plus the task and
+ * the file name, which the caller wrote and which are masked before they are
+ * kept (guardian/task.js storableTask, guardian/observe.js). Every object it
  * serialises comes from a `toJSON()` that is itself value-free -- Observation
  * cannot hold a matched value, Action cannot hold one, and the state projection
  * is built from those two. There is no code path from a finding's `original` or
@@ -30,9 +32,10 @@ const DEFAULT_LOG = path.join(STATS_DIR, 'guardian-audit.jsonl');
  * @param {object} args
  * @param {import('./state').GuardianState} args.state
  * @param {object} args.decision
+ * @param {boolean} [args.staleArtifactRemoved] - an earlier run's artifact was removed
  * @returns {object}
  */
-function buildEvent({ state, decision }) {
+function buildEvent({ state, decision, staleArtifactRemoved = false }) {
   const first = state.observations[0] || null;
   const risk = state.latestRisk;
   const verification = state.latestVerification;
@@ -49,9 +52,10 @@ function buildEvent({ state, decision }) {
     agentTrust: state.context.requestingAgent.trust,
     destination: state.context.destination.id,
     policy: state.context.policy,
-    // Free text the CALLER supplied, sanitised and capped. It is never trusted
-    // as an instruction; the only thing read out of it is the intent below, and
-    // that can only make the protection stricter (guardian/task.js).
+    // Free text the CALLER supplied, sanitised, masked and capped -- people
+    // write the very values they are asking about into it (#48). It is never
+    // trusted as an instruction; the only thing read out of it is the intent
+    // below, and that can only make the protection stricter (guardian/task.js).
     task: state.context.task,
     taskIntent: state.context.taskAnalysis.intentId,
     taskRecognised: state.context.taskAnalysis.recognised,
@@ -60,6 +64,7 @@ function buildEvent({ state, decision }) {
 
     // What was found -- classes and counts.
     resourceType: first ? first.resourceType : null,
+    // The file's name, masked like the task: names carry PII too.
     resourceName: first ? first.resourceName : null,
     findingClasses: first ? first.presentClasses : [],
     findingCount: first ? first.totalFindings : 0,
@@ -87,6 +92,7 @@ function buildEvent({ state, decision }) {
     verificationAttempts: state.verifications.length,
     verificationPassed: verification ? verification.goalSatisfied : false,
     residualClasses: verification ? verification.residualClasses : [],
+    staleArtifactRemoved,
     prohibitedValuesReleased: decision.decision === 'BLOCK' || decision.decision === 'REQUIRE_APPROVAL'
       ? 0
       : (verification ? verification.residualClasses.length : 0),

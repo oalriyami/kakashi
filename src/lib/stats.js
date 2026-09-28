@@ -29,18 +29,28 @@ function saveStats(stats) {
 }
 
 function recordMask(findings) {
+  const byCategory = {};
+  for (const f of findings) byCategory[f.cat] = (byCategory[f.cat] || 0) + 1;
+  return recordCounts({ total: findings.length, byCategory });
+}
+
+/**
+ * Count one masked file from totals alone -- for a caller that keeps counts
+ * rather than findings (the Guardian, #48).
+ * @param {{ total: number, byCategory: Object<string, number> }} counts
+ */
+function recordCounts({ total, byCategory = {} }) {
   const stats = loadStats();
   stats.filesMasked += 1;
-  stats.totalFindings += findings.length;
+  stats.totalFindings += total;
   if (!stats.byCategory) stats.byCategory = { id: 0, pii: 0, cred: 0 };
   // Migrate legacy 'uae' bucket if present in older stats files
   if (stats.byCategory.uae != null) {
     stats.byCategory.id = (stats.byCategory.id || 0) + stats.byCategory.uae;
     delete stats.byCategory.uae;
   }
-  for (const f of findings) {
-    if (stats.byCategory[f.cat] == null) stats.byCategory[f.cat] = 0;
-    stats.byCategory[f.cat] += 1;
+  for (const [cat, n] of Object.entries(byCategory)) {
+    stats.byCategory[cat] = (stats.byCategory[cat] || 0) + n;
   }
   saveStats(stats);
   return stats;
@@ -85,5 +95,6 @@ module.exports = {
   loadStats,
   saveStats,
   recordMask,
+  recordCounts,
   impactSnapshot,
 };

@@ -13,12 +13,12 @@
 **hide what shouldn't leave your machine**
 
 [![npm](https://img.shields.io/badge/npm-%40muhammadatef%2Fkakashi-CC0000?style=flat&logo=npm&logoColor=white)](https://www.npmjs.com/package/@muhammadatef/kakashi)
-[![version](https://img.shields.io/badge/version-1.3.1-1C2030?style=flat)](CHANGELOG.md)
+[![version](https://img.shields.io/npm/v/@muhammadatef/kakashi?label=version&color=1C2030&style=flat)](CHANGELOG.md)
 [![node](https://img.shields.io/badge/node-%3E%3D18-4CAF50?style=flat)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-MIT-B8C4D4?style=flat)](LICENSE)
 [![agents](https://img.shields.io/badge/agents-7_installed_%2B_any_shell-8A2BE2?style=flat)](#works-inside-your-agent)
 [![formats](https://img.shields.io/badge/formats-50%2B-CC0000?style=flat)](#50-file-formats)
-[![tests](https://img.shields.io/badge/tests-407_passing-4CAF50?style=flat)](tests/)
+[![tests](https://img.shields.io/badge/tests-942_passing-4CAF50?style=flat)](tests/)
 [![network calls](https://img.shields.io/badge/network_calls-zero-1C2030?style=flat)](#privacy-guarantee)
 
 **A local-first privacy engine for agentic AI.**
@@ -27,7 +27,7 @@ It finds secrets and personal data in your files, folders and databases — and 
 
 Nothing is uploaded. No daemon. No cloud. **Zero network calls.**
 
-[What it is](#what-kakashi-is) · [New in v1.3.1](#new-in-v131--kakashi-works-everywhere) · [Install](#install) · [Upgrade](#upgrade-to-the-latest-version) · [Guardian](#the-guardian--autonomous-guardrails) · [Folders](#scan-a-whole-folder) · [Databases](#scan-and-mask-a-database) · [Agents](#works-inside-your-agent) · [Commands](#commands)
+[What it is](#what-kakashi-is) · [New in v1.4.0](#new-in-v140--more-found-less-guessed-nothing-left-behind) · [Install](#install) · [Upgrade](#upgrade-to-the-latest-version) · [Guardian](#the-guardian--autonomous-guardrails) · [Folders](#scan-a-whole-folder) · [Databases](#scan-and-mask-a-database) · [Agents](#works-inside-your-agent) · [Commands](#commands)
 
 </div>
 
@@ -35,7 +35,7 @@ Nothing is uploaded. No daemon. No cloud. **Zero network calls.**
 
 ## What Kakashi is
 
-Kakashi started as a masker you invoke. As of **v1.3.1 it has three protection layers and a smart orchestrator**, and you can use any layer on its own or let `/kakashi` choose the right one from your intent.
+Kakashi started as a masker you invoke. As of **v1.3 it has three protection layers and a smart orchestrator**, and you can use any layer on its own or let `/kakashi` choose the right one from your intent.
 
 | Layer | What it does | Commands |
 | --- | --- | --- |
@@ -68,26 +68,16 @@ Kakashi started as a masker you invoke. As of **v1.3.1 it has three protection l
 
 ---
 
-## New in v1.3.1 — `/kakashi` works everywhere
+## New in v1.4.0 — more found, less guessed, nothing left behind
 
-v1.3 introduced the **Kakashi orchestrator**: one entry point that reads what you want to do and selects the right local command. v1.3.1 closes the activation gap in Codex, Copilot and Continue, whose runtimes do not provide native user-defined slash commands.
+1.4.0 ships 47 detection patterns, twelve more than 1.3.1, and closes the findings of a full QA pass. The full list is in [CHANGELOG.md](CHANGELOG.md#140--2026-09-28).
 
-Triggers work with or without a leading slash, in any letter case:
+- **More is detected.** Names by field, column and context in Latin and Arabic script (including capitals, lower case, accents, initials and Arabic prefix letters), Gulf identifier formats, every country's IBAN, E.164 phone numbers, MAC and IPv6 addresses, passwords in URLs, session cookies and eight more credential formats.
+- **Less is guessed.** Everyday words, places, form headers, commit hashes and code references are no longer taken for names or secrets; card numbers need a valid check digit.
+- **Files stay whole.** Every text-bearing part of a `.docx`, `.pptx` and `.xlsx` is read and masked (charts and drawings are kept); masked JSON, YAML, TOML, CSV, TSV and database exports still parse; UTF-16 text files keep their encoding; PDFs are read in full.
+- **Nothing is left behind.** No output is written through a symbolic link, originals are never overwritten unless asked, connection strings are never printed, the Guardian masks the task and file name it records and removes its own stale `guarded_` copy, and a default install pulls no database driver and has no open advisories.
 
-```text
-kakashi
-/Kakashi check this file
-use kakashi to scan this repository
-KAKASHI can I send this report to Claude for a summary?
-```
-
-- **A bare trigger shows the features brief.** Kakashi explains Check, Mask, Guardian and the standing sidecar, offers example prompts, and waits for your intent.
-- **A trigger plus intent dispatches immediately.** A file check goes to `scan`; a repository audit goes to `scan-dir`; a database request starts with `db-scan`; and a release question goes to Guardian instead of silently masking the file.
-- **Agents with native command files receive all 14 commands.** The installer keeps the orchestrator and every dedicated file, folder, database, Guardian and evidence command together.
-- **Agents without native custom slash commands use the same behavior through their rule or system prompt.** If the runtime displays `Unrecognized command '/kakashi'`, follow with a plain-language request such as `use kakashi to check this file`; Kakashi treats that as the real trigger and continues normally.
-- **Rule parity is test-enforced.** The command definition, always-on rule, `AGENTS.md` and `CLAUDE.md` carry the same brief, trigger contract and command catalogue so supported agents do not drift onto different behavior.
-
-v1.3.1 does not change the pattern engine, Guardian decision loop or database drivers. It is backward-compatible with v1.3.0 tokens and workflows.
+Detection changes mean masked output from 1.3.x and 1.4.0 can differ on the same file. Existing commands, flags and token formats work as before; a few now refuse what they used to do silently (overwrite an original, call a folder with unreadable files clean, accept a malformed database URL) and exit 2 — see the changelog.
 
 ---
 
@@ -177,7 +167,7 @@ Check what you have:
 kakashi --version
 ```
 
-If it is below **1.3.1**, upgrade to get the latest orchestrator fixes, the complete 14-command catalogue and the activation brief:
+If it is below the version on the badge above, upgrade to get the latest detection and safety fixes (see [New in v1.4.0](#new-in-v140--more-found-less-guessed-nothing-left-behind)):
 
 ```bash
 npm install -g @muhammadatef/kakashi@latest
@@ -196,7 +186,7 @@ kakashi install
 Verify:
 
 ```bash
-kakashi --version        # 1.3.1
+kakashi --version        # the version on the badge above
 kakashi guard --help     # exists ⇒ the Guardian is installed
 kakashi install --list
 ```
@@ -405,7 +395,9 @@ kakashi guard data.csv --agent cursor --task "..." --json
 
 `--json` emits the machine-readable decision — **classes and counts only, never values** — so an agent can branch on `decision` and `risk.level` without a single secret entering its context window.
 
-Every decision is also appended to a **value-free audit log** at `~/.kakashi/guardian-audit.jsonl` (a test asserts it contains no raw secrets). Disable with `--no-audit`, or redirect with `--audit-log <path>`.
+Every decision is also appended to a **value-free audit log** at `~/.kakashi/guardian-audit.jsonl` (a test asserts it contains no raw secrets). Disable with `--no-audit`, or redirect with `--audit-log <path>`. The `--task` text and the file's name are masked before they are kept, in the log and in `--json` alike: people write the values they are asking about into a task (`"summarise the rows for a.hassan@example.com"` is kept as `"summarise the rows for [EMAIL_1]"`).
+
+A `guarded_<file>` left by an earlier run is removed when the next run does not write one, so a `REQUIRE_APPROVAL` or `BLOCK` never sits beside an old copy that reads as released. An `--output` under any other name is never deleted; `--json` reports `staleOutputKept: true` when a file from before the run is still there. With `--json`, an error is JSON too (`{"decision": null, "error": {"code", "message"}, "releasePath": null}`, exit 2).
 
 ```
 Options
@@ -517,7 +509,7 @@ Kakashi
 | **Databricks** | `databricks://` |
 | **SQLite** | `sqlite://` or any `.db` / `.sqlite` / `.sqlite3` path |
 
-Database drivers are **optional dependencies**, lazily required — you only install the one you use, and Kakashi tells you exactly what to `npm install` if it is missing.
+Database drivers are **optional peer dependencies**, lazily required — a plain install pulls none of them, you install the one you use, and Kakashi tells you exactly what to `npm install` if it is missing.
 
 `--limit` caps rows fetched (default 10000) and is **pushed down into the query**, so the cap is enforced at the server, not after the rows have already crossed the wire.
 
@@ -904,7 +896,7 @@ Patterns, formats, agents — all welcome.
 git clone https://github.com/Muhammadatef/kakashi
 cd kakashi
 npm install
-npm test        # 407 tests, offline, a few seconds
+npm test        # 942 tests, offline, a few seconds
 ```
 
 New pattern? Add to `src/engine/patterns.js` — **and classify it** in `src/guardian/classes.js`, or the drift guard fails the build.<br/>
