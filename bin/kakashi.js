@@ -6,7 +6,6 @@ const { writeFileSafe, createWriteStreamSafe } = require('../src/lib/safe-write'
 const { parseLimit } = require('../src/engine/db/limit');
 const path = require('path');
 const readline = require('readline');
-const { glob } = require('glob');
 const chalk = require('chalk');
 const { maskText } = require('../src/engine/masker');
 const { PATTERNS } = require('../src/engine/patterns');
@@ -15,6 +14,7 @@ const { printHeader, printFindings } = require('../src/lib/output');
 const { loadStats, recordMask, recordCounts, impactSnapshot } = require('../src/lib/stats');
 const dbEngine = require('../src/engine/db');
 const { scanDirectory } = require('../src/lib/scan-dir');
+const { discoverFiles } = require('../src/lib/discover');
 const reporter = require('../src/lib/reporter');
 const { resolveLang, getLang } = require('../src/lib/i18n');
 
@@ -332,7 +332,8 @@ program
   .description('Mask all supported files in a directory')
   .option('-r, --recursive', 'Recurse into subdirectories')
   .option('--ext <exts>', 'Comma-separated extensions to include')
-  .option('--exclude <patterns>', 'Glob patterns to exclude')
+  .option('--exclude <patterns>', 'Comma-separated .gitignore-style patterns to skip, added to the defaults (node_modules, .git, masked_*)')
+  .option('--no-gitignore', 'Do NOT honour .gitignore / .kakashiignore')
   .addOption(modeOption())
   .action(async (directory, options) => {
     if (!fs.existsSync(directory)) {
@@ -351,11 +352,13 @@ program
         false,
       )
       : formats.globPatterns(recursive);
-    const ignore = options.exclude ? options.exclude.split(',').map((s) => s.trim()) : ['**/node_modules/**', '**/masked_*'];
-    // dot: true -- without it glob skips every hidden file, so `.env` (the
-    // commonest secret file there is) was never even offered to the masker.
-    const files = await glob(pattern, {
-      cwd: directory, absolute: true, ignore, nodir: true, dot: true, nocase: true,
+    // The same discovery as scan-dir (#51): .gitignore / .kakashiignore are
+    // honoured, .git and node_modules are never walked, and --exclude adds to
+    // the defaults instead of replacing them. Hidden files are included --
+    // `.env` is the commonest secret file there is.
+    const { files } = await discoverFiles(directory, pattern, {
+      ignoreFiles: options.gitignore !== false,
+      exclude: options.exclude ? options.exclude.split(',').map((s) => s.trim()) : [],
     });
     if (files.length === 0) {
       console.log(chalk.yellow('No matching files found.'));
@@ -602,7 +605,7 @@ program
   .option('-o, --output <path>', 'Write report to path instead of stdout')
   .option('--parallel <n>', 'Concurrent file scans', '8')
   .option('--no-gitignore', 'Do NOT honour .gitignore / .kakashiignore')
-  .option('--exclude <patterns>', 'Additional comma-separated glob patterns to exclude')
+  .option('--exclude <patterns>', 'Comma-separated .gitignore-style patterns to skip, added to the defaults (node_modules, .git, masked_*)')
   .option('--lang <lang>', 'Report language: en | ar (HTML only)', 'en')
   .option('--include-values', 'JSON only: embed the matched plaintext in the report (NOT agent-safe — writes every detected secret into the output)')
   .action(async (directory, options) => {

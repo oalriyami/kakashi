@@ -127,6 +127,29 @@ to 3.
 
 ### Fixed
 
+- **Folder commands read ignore files as git does, and agree on what to
+  look at** (#51). `.kakashiignore` and `.gitignore` lines were translated by
+  hand into glob patterns: `b/` and `*.log` matched only at the top level
+  (`b/app.env` and `logs/x.log` were still scanned) and `!negation` was
+  mangled. They are now read with git's own rules (the `ignore` package), in
+  the root and in every folder below it. `mask-dir` used none of this: it
+  walked `.git` (and wrote `.git/hooks/masked_pre-push.sh`) and ignored both
+  files. It now shares `scan-dir`'s file discovery, and takes
+  `--no-gitignore` too. `--exclude` patterns (in `.gitignore` syntax) are
+  added to the defaults -- `node_modules`, `.git`, `.hg`, `.svn` and
+  `masked_*` -- instead of replacing them, which had brought `node_modules`
+  and earlier masked copies back in.
+- **Dates in spreadsheets are read as dates** (#52). A date is stored as a
+  serial number, and was read as one: a date of birth in a `Date of Birth`
+  column (`31243`) matched no date pattern and was never flagged. Cells whose
+  number format shows a date or a time (built-in or custom, 1900 or 1904 date
+  system) are now read as ISO dates (`1985-07-15`), and a masked one is
+  written as its token. A blank row between two tables is kept as a blank
+  line, so the second table's first row is read as its header: the tables
+  used to fuse, and the second header (`Customer`) was masked as a name. With
+  the in-place writer of #46, bold, fills, number formats, column widths,
+  frozen panes, data validation, conditional formats, charts and formula
+  cells all survive masking; a test now checks each of them.
 - **Usage errors exit 2, and every command documents its exit codes** (#49).
   An unknown command or option, a missing argument or required option, and
   an invalid choice exited 1 -- the code `scan` uses for "sensitive data

@@ -18,7 +18,7 @@
 [![license](https://img.shields.io/badge/license-MIT-B8C4D4?style=flat)](LICENSE)
 [![agents](https://img.shields.io/badge/agents-7_installed_%2B_any_shell-8A2BE2?style=flat)](#works-inside-your-agent)
 [![formats](https://img.shields.io/badge/formats-50%2B-CC0000?style=flat)](#50-file-formats)
-[![tests](https://img.shields.io/badge/tests-956_passing-4CAF50?style=flat)](tests/)
+[![tests](https://img.shields.io/badge/tests-968_passing-4CAF50?style=flat)](tests/)
 [![network calls](https://img.shields.io/badge/network_calls-zero-1C2030?style=flat)](#privacy-guarantee)
 
 **A local-first privacy engine for agentic AI.**
@@ -421,7 +421,7 @@ There is also `kakashi agent-guard` — the same engine as a **local privacy dae
 
 ## Scan a whole folder
 
-Point it at a repository, a shared drive, or a delivery folder. It honours `.gitignore` and `.kakashiignore`, scans in parallel, and emits a **PDPL-mapped compliance report**.
+Point it at a repository, a shared drive, or a delivery folder. It honours `.gitignore` and `.kakashiignore` (in every folder, with git's own rules), scans in parallel, and emits a **PDPL-mapped compliance report**.
 
 ```bash
 kakashi scan-dir ./repo
@@ -458,7 +458,7 @@ Kakashi — scan-dir
 | `-o, --output` | write the report to a path instead of stdout |
 | `--parallel <n>` | concurrent file scans (default 8) |
 | `--no-gitignore` | do **not** honour `.gitignore` / `.kakashiignore` |
-| `--exclude` | extra comma-separated glob patterns |
+| `--exclude` | extra comma-separated patterns in `.gitignore` syntax (`dist/`, `*.log`), **added** to the defaults |
 | `--lang` | report language `en` \| `ar` (HTML) |
 | `--include-values` | JSON only — embeds matched plaintext. **Not agent-safe.** |
 
@@ -466,8 +466,10 @@ To mask rather than report:
 
 ```bash
 kakashi mask-dir ./deliverables -r --ext xlsx,docx,csv
-kakashi mask-dir ./repo -r --exclude "node_modules/**,dist/**" --mode redact
+kakashi mask-dir ./repo -r --exclude "dist/,*.min.js" --mode redact
 ```
+
+Both commands look at the same files. `node_modules`, `.git`, `.hg`, `.svn` and earlier `masked_` copies are always skipped; `--exclude` adds to that list. `.gitignore` and `.kakashiignore` are honoured by both unless you pass `--no-gitignore`: `b/` skips a folder `b` at any depth, `*.log` every .log file, `/build` only the top-level one, and `!keep.log` brings a file back. `scan-dir` says how many files the ignore files left out.
 
 ---
 
@@ -608,7 +610,7 @@ Kakashi reads, masks, and **reconstructs** the original format. The file you get
 
 | Format | Read | Mask | Reconstruct | Status |
 |--------|:----:|:----:|:-----------:|--------|
-| Excel `.xlsx` `.xls` | yes | yes | full `.xlsx` | **stable** — cell-level masking, catches secrets embedded in narrative cells; charts and drawings are kept. Legacy `.xls` / `.xlsb` need SheetJS: `npm install -g https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` |
+| Excel `.xlsx` `.xls` | yes | yes | full `.xlsx` | **stable** — cell-level masking, catches secrets embedded in narrative cells; formatting, validation, conditional formats, charts and drawings are kept, and date cells are read as the dates they show. Legacy `.xls` / `.xlsb` need SheetJS: `npm install -g https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` |
 | CSV / TSV | yes | yes | same format | **stable** |
 | JSON / JSONL / JSON5 | yes | yes | same format | **stable** |
 | YAML / TOML | yes | yes | same format | **stable** |
@@ -906,7 +908,7 @@ Patterns, formats, agents — all welcome.
 git clone https://github.com/Muhammadatef/kakashi
 cd kakashi
 npm install
-npm test        # 956 tests, offline, a few seconds
+npm test        # 968 tests, offline, a few seconds
 ```
 
 New pattern? Add to `src/engine/patterns.js` — **and classify it** in `src/guardian/classes.js`, or the drift guard fails the build.<br/>

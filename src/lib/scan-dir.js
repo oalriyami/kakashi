@@ -10,36 +10,17 @@
  *   parallelism is tracked as a v1.2 upgrade for CPU-bound XLSX/PDF workloads.
  *
  * .gitignore / .kakashiignore:
- *   Honoured via glob's `ignore` option after being converted to glob patterns.
- *   Nested .gitignore files (deep in the tree) are NOT yet supported — only
- *   the root file. This matches the ~90% common case.
+ *   Honoured with .gitignore semantics, in the root and in every folder below
+ *   it -- see lib/discover.js, which mask-dir shares (#51).
  */
 
 const fs = require('fs');
 const path = require('path');
 const { glob } = require('glob');
+const { discoverFiles, exclusions, globIgnore } = require('./discover');
 const { maskText } = require('../engine/masker');
 const formats = require('../engine/formats');
 const { summarize } = require('./pdpl-mapping');
-
-function readIgnoreFile(filePath) {
-  if (!fs.existsSync(filePath)) return [];
-  return fs.readFileSync(filePath, 'utf8')
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith('#'))
-    // Convert basic gitignore patterns to glob patterns:
-    //   "node_modules"  -> "**/node_modules/**"
-    //   "*.log"         -> "**/*.log"
-    //   "/build"        -> "build/**"
-    //   already-globby patterns are passed through.
-    .map((l) => {
-      if (l.includes('*') || l.includes('/')) {
-        return l.startsWith('/') ? l.slice(1) + '/**' : l;
-      }
-      return `**/${l}/**`;
-    });
-}
 
 /**
  * Async concurrency pool — process an iterable with at most N in flight.
@@ -85,36 +66,17 @@ async function scanDirectory(rootPath, options = {}) {
   const started = Date.now();
   const pattern = formats.globPatterns(true);
 
-  const baseIgnore = [
-    '**/node_modules/**',
-    '**/masked_*',
-    '**/.git/**',
-    ...extraIgnore,
-  ];
-  const ignoreFileRules = respectGitignore
-    ? [
-      ...readIgnoreFile(path.join(rootPath, '.gitignore')),
-      ...readIgnoreFile(path.join(rootPath, '.kakashiignore')),
-    ]
-    : [];
-  const ignore = [...baseIgnore, ...ignoreFileRules];
-
-  // dot: true -- hidden files are where credentials live (`.env`, `.env.local`).
-  // Without it a compliance report can read "0 credentials" while a production
-  // connection string sits in config/.env.
-  const globOpts = { cwd: rootPath, absolute: true, nodir: true, dot: true, nocase: true };
-  const allFiles = await glob(pattern, { ...globOpts, ignore });
-
-  // Honouring .gitignore is deliberate, but it is silent, and `.env` is in
-  // almost every .gitignore -- exactly the file most likely to hold a live
-  // credential. Left unsaid, a report reading "0 credentials" is indistinguishable
-  // from one that simply never looked. So count what the ignore FILES excluded
-  // (not the always-on node_modules/.git rules) and let the caller surface it.
-  let skippedByIgnoreFile = 0;
-  if (ignoreFileRules.length > 0) {
-    const withoutIgnoreFiles = await glob(pattern, { ...globOpts, ignore: baseIgnore });
-    skippedByIgnoreFile = withoutIgnoreFiles.length - allFiles.length;
-  }
+  // --exclude patterns are added to the defaults, never in place of them.
+  const { files: allFiles, skippedByIgnoreFile } = await discoverFiles(rootPath, pattern, {
+    ignoreFiles: respectGitignore,
+    exclude: extraIgnore,
+    // Honouring .gitignore is deliberate, but it is silent, and `.env` is in
+    // almost every .gitignore -- exactly the file most likely to hold a live
+    // credential. Left unsaid, a report reading "0 credentials" is
+    // indistinguishable from one that simply never looked. So count what the
+    // ignore FILES excluded and let the caller surface it.
+    countIgnored: true,
+  });
 
   const fileResults = [];
   let processed = 0;
@@ -162,7 +124,14 @@ async function scanDirectory(rootPath, options = {}) {
   // Everything else in the tree -- images, archives, binaries, formats the
   // engine does not read. Not a failure, but a report must say it did not
   // look at them rather than let "0 findings" suggest it did (#36).
-  const everything = await glob('**/*', { ...globOpts, ignore });
+  const ex = exclusions(rootPath, { ignoreFiles: respectGitignore, exclude: extraIgnore });
+  const everything = await glob('**/*', {
+    cwd: rootPath,
+    absolute: true,
+    nodir: true,
+    dot: true,
+    ignore: globIgnore(ex),
+  });
   const seen = new Set(allFiles);
   const byExtension = {};
   let otherFiles = 0;
@@ -192,4 +161,4 @@ async function scanDirectory(rootPath, options = {}) {
   };
 }
 
-module.exports = { scanDirectory, pool, readIgnoreFile };
+module.exports = { scanDirectory, pool };

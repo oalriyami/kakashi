@@ -292,7 +292,7 @@ summarize(findings) -> { findings, summary: { total, byCategory, bySeverity, byA
 
 ## 7 · Enterprise directory scanner
 
-`scan-dir` walks a directory tree, honours `.gitignore` and `.kakashiignore`, scans every supported file concurrently, and emits an aggregate report in JSON, HTML, or Markdown.
+`scan-dir` walks a directory tree, honours `.gitignore` and `.kakashiignore`, scans every supported file concurrently, and emits an aggregate report in JSON, HTML, or Markdown. File discovery lives in `src/lib/discover.js` and is shared with `mask-dir`: ignore files in every folder are read with git's semantics (the `ignore` package), `node_modules`, `.git`, `.hg`, `.svn` and `masked_*` are always skipped, and `--exclude` adds `.gitignore`-syntax patterns to those defaults.
 
 ### 7.1 Concurrency model
 
