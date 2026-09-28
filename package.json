@@ -17,7 +17,8 @@
   },
   "bin": {
     "kakashi": "bin/kakashi.js",
-    "k": "bin/kakashi.js"
+    "k": "bin/kakashi.js",
+    "kakashi-install": "bin/install.js"
   },
   "scripts": {
     "install-agents": "node bin/install.js",
@@ -28,20 +29,34 @@
     "docs:deck": "node presentation/build.js && soffice --headless --convert-to pptx --outdir presentation presentation/Kakashi_Manager_Briefing.fodp && soffice --headless --convert-to pdf --outdir presentation presentation/Kakashi_Manager_Briefing.fodp"
   },
   "dependencies": {
-    "xlsx": "^0.18.5",
     "jszip": "^3.10.1",
     "pdf-parse": "^1.1.1",
     "commander": "^11.0.0",
     "chalk": "^4.1.2",
     "ora": "^5.4.1",
-    "glob": "^10.3.10"
+    "glob": "^10.5.0"
   },
-  "optionalDependencies": {
+  "peerDependencies": {
+    "xlsx": ">=0.18.5",
+    "pg": ">=8.11.0",
+    "mysql2": ">=3.6.0",
+    "mongodb": ">=6.3.0",
+    "snowflake-sdk": ">=1.9.0",
+    "@databricks/sql": ">=1.7.0",
+    "better-sqlite3": ">=11.0.0"
+  },
+  "peerDependenciesMeta": {
+    "xlsx": { "optional": true },
+    "pg": { "optional": true },
+    "mysql2": { "optional": true },
+    "mongodb": { "optional": true },
+    "snowflake-sdk": { "optional": true },
+    "@databricks/sql": { "optional": true },
+    "better-sqlite3": { "optional": true }
+  },
+  "devDependencies": {
+    "xlsx": "^0.18.5",
     "pg": "^8.11.0",
-    "mysql2": "^3.6.0",
-    "mongodb": "^6.3.0",
-    "snowflake-sdk": "^1.9.0",
-    "@databricks/sql": "^1.7.0",
     "better-sqlite3": "^11.0.0"
   },
   "engines": {

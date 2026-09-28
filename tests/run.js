@@ -27,6 +27,8 @@ const { runGuardFallbackTests } = require('./guard-fallback.test');
 const { runImpactTests } = require('./impact.test');
 const { runNameTests } = require('./names.test');
 const { runDocsTests } = require('./docs.test');
+const { runInstallTests } = require('./install.test');
+const { runDepsTests } = require('./deps.test');
 
 (async () => {
   let ok = true;
@@ -60,6 +62,8 @@ const { runDocsTests } = require('./docs.test');
   ok = runImpactTests() && ok;
   ok = (await runNameTests()) && ok;
   ok = runDocsTests() && ok;
+  ok = (await runInstallTests()) && ok;
+  ok = (await runDepsTests()) && ok;
 
   console.log(ok ? '\nAll tests passed.' : '\nSome tests failed.');
   process.exit(ok ? 0 : 1);

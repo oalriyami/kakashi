@@ -1,10 +1,11 @@
+const { missingDriver } = require('./missing');
 const { stripStatement } = require('./limit');
 
 /**
  * PostgreSQL driver adapter.
  *
  * Requires the `pg` npm package:
- *   npm install pg
+ *   npm install -g pg   (optional; see ./missing.js)
  *
  * Connection string: postgres://user:pass@host:port/db
  *
@@ -28,7 +29,7 @@ async function* query(conn, sql, options = {}) {
   try {
     ({ Client } = require('pg'));
   } catch (err) {
-    throw new Error("Postgres driver requires the 'pg' package. Install with: npm install pg");
+    throw missingDriver('PostgreSQL', 'pg');
   }
   const limit = options.limit;
   if (!Number.isSafeInteger(limit) || limit <= 0) {

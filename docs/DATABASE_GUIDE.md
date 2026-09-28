@@ -109,15 +109,18 @@ kakashi db-mask  mock:customers -q demo -f csv -o masked_customers.csv --limit 5
 
 ## The six supported drivers
 
-Every driver is **lazy-loaded** — Kakashi's own install stays small and you
-only add the client library for the database you actually use. If a driver
-package is missing, Kakashi throws a friendly `MODULE_NOT_FOUND` with the
-exact `npm install` command to fix it.
+Every driver is an **optional peer dependency**, loaded only when used:
+`npm install -g @muhammadatef/kakashi` installs none of them, and you add the
+client library for the database you actually use. Install it the same way as
+Kakashi -- globally (`npm install -g <driver>`), or in the project you run
+Kakashi from. If a driver is missing, Kakashi says which one and how to
+install it. The Snowflake, Databricks and current MongoDB clients need
+Node 20 or later.
 
 ### PostgreSQL (also works with pgvector, TimescaleDB, CockroachDB, Aurora)
 
 ```bash
-npm install pg
+npm install -g pg
 ```
 
 Connection string:
@@ -140,7 +143,7 @@ kakashi db-mask "$DATABASE_URL" \
 ### MySQL / MariaDB
 
 ```bash
-npm install mysql2
+npm install -g mysql2
 ```
 
 Connection string:
@@ -158,7 +161,7 @@ kakashi db-mask "mysql://analyst:$MYSQL_PASSWORD@10.0.0.5:3306/hr" \
 ### MongoDB
 
 ```bash
-npm install mongodb
+npm install -g mongodb
 ```
 
 Connection string:
@@ -179,7 +182,7 @@ you can express as a `find()` on a collection works here.
 ### Snowflake
 
 ```bash
-npm install snowflake-sdk
+npm install -g snowflake-sdk
 ```
 
 Connection string:
@@ -201,7 +204,7 @@ fast.
 ### Databricks SQL Warehouse
 
 ```bash
-npm install @databricks/sql
+npm install -g @databricks/sql     # 2.2 or later
 ```
 
 Connection string:
@@ -224,7 +227,7 @@ kakashi db-mask \
 ### SQLite (local file or in-memory)
 
 ```bash
-npm install better-sqlite3
+npm install -g better-sqlite3
 ```
 
 Connection "string" is a file path — or `:memory:` for a scratch DB:
@@ -305,7 +308,7 @@ crash; that is what a CI job wants when a PR introduces a new leak:
 
 | Symptom | Fix |
 | --- | --- |
-| `Driver "postgres" needs its client library installed. Install with: npm install pg` | Do exactly what it says. Kakashi's DB drivers are lazy-loaded so you only install what you use. |
+| `The PostgreSQL driver is not installed. Install it next to Kakashi: npm install -g pg …` | Do exactly what it says. Kakashi's DB drivers are optional, so you only install what you use. |
 | `ECONNREFUSED` / `ETIMEDOUT` | Database not reachable from your machine. Check VPN, firewall, `psql`-equivalent connectivity first — this is a network issue, not a Kakashi one. |
 | `28P01: password authentication failed` (Postgres) / `1045: Access denied` (MySQL) | Credentials wrong. Re-check the env var expansion (`echo $DATABASE_URL` in a private terminal) and that special characters are URL-encoded. |
 | Query hangs / OOM on Snowflake or Databricks | You forgot `--limit`. Kill the query at the warehouse and re-run with `--limit 1000` (or lower) while you calibrate the extraction size. |

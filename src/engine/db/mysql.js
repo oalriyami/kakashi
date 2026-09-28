@@ -1,10 +1,11 @@
+const { missingDriver } = require('./missing');
 const { sqlWithLimit } = require('./limit');
 
 /**
  * MySQL / MariaDB driver adapter.
  *
  * Requires the `mysql2` npm package:
- *   npm install mysql2
+ *   npm install -g mysql2   (optional; see ./missing.js)
  *
  * Connection string: mysql://user:pass@host:port/db
  *
@@ -18,7 +19,7 @@ async function* query(conn, sql, options = {}) {
   try {
     mysql = require('mysql2/promise');
   } catch (err) {
-    throw new Error("MySQL driver requires the 'mysql2' package. Install with: npm install mysql2");
+    throw missingDriver('MySQL', 'mysql2');
   }
 
   const wrapped = sqlWithLimit(sql, options.limit);

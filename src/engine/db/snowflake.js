@@ -4,18 +4,20 @@ const { sqlWithLimit } = require('./limit');
  * Snowflake driver adapter.
  *
  * Requires the `snowflake-sdk` npm package:
- *   npm install snowflake-sdk
+ *   npm install -g snowflake-sdk   (optional; see ./missing.js)
  *
  * Connection string:
  *   snowflake://user:pass@account.region.snowflakecomputing.com/db/schema?warehouse=WH
  */
+
+const { missingDriver } = require('./missing');
 
 async function* query(conn, sql, options = {}) {
   let snowflake;
   try {
     snowflake = require('snowflake-sdk');
   } catch (err) {
-    throw new Error("Snowflake driver requires the 'snowflake-sdk' package. Install with: npm install snowflake-sdk");
+    throw missingDriver('Snowflake', 'snowflake-sdk', 'It needs Node 20 or later');
   }
 
   const url = new URL(conn);

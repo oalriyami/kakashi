@@ -16,12 +16,22 @@ curl -fsSL https://raw.githubusercontent.com/Muhammadatef/kakashi/main/install.s
 irm https://raw.githubusercontent.com/Muhammadatef/kakashi/main/install.ps1 | iex
 ```
 
+A piped script takes no options. To pass some (`--dry-run`, `--only cursor`,
+`--uninstall`), run it as a script block:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Muhammadatef/kakashi/main/install.ps1))) --dry-run
+```
+
+With bash: `curl -fsSL …/install.sh | bash -s -- --dry-run`. `--dry-run` and
+`--uninstall` never install the package; an unknown option stops the script
+before it does anything.
+
 **npm**
 
 ```bash
 npm install -g @muhammadatef/kakashi
-kakashi --help
-node "$(npm root -g)/@muhammadatef/kakashi/bin/install.js" --all
+kakashi install          # the agent rules and slash commands (also: kakashi-install)
 ```
 
 From a cloned repo:
@@ -31,7 +41,7 @@ git clone https://github.com/Muhammadatef/kakashi.git
 cd kakashi
 npm install
 npm link
-node bin/install.js --all --with-init
+kakashi install --all --with-init      # or: node bin/install.js --all --with-init
 ```
 
 ## Upgrade
@@ -46,12 +56,13 @@ the agent rules are written at install time, so an upgraded binary alone is not
 enough:
 
 ```bash
-node "$(npm root -g)/@muhammadatef/kakashi/bin/install.js" --all --force
+kakashi install
 ```
 
 Re-running the one-liner at the top of this file does both steps and is safe to
 repeat. Upgrading is non-destructive: Kakashi only rewrites the block between
-its `<!-- kakashi-begin -->` / `<!-- kakashi-end -->` markers, leaving the rest
+its `<!-- kakashi-begin -->` / `<!-- kakashi-end -->` markers (on every run;
+`--force` is no longer needed), leaving the rest
 of your `CLAUDE.md`, `AGENTS.md` and Cursor rules untouched. No config migration
 is needed from 1.0 or 1.1.
 
@@ -59,43 +70,47 @@ is needed from 1.0 or 1.1.
 
 | Agent | Command | Auto-activates? |
 |---|---|:-:|
-| **Claude Code** | `node bin/install.js --only claude` | Yes |
-| **Cursor** | `node bin/install.js --only cursor` | Yes |
-| **Codex CLI** | `node bin/install.js --only codex` | Yes |
-| **Windsurf** | `node bin/install.js --only windsurf --with-init` | With `--with-init` |
-| **Cline** | `node bin/install.js --only cline --with-init` | With `--with-init` |
-| **GitHub Copilot** | `node bin/install.js --only copilot --with-init` | With `--with-init` |
-| **Continue** | `node bin/install.js --only continue` | Partial |
+| **Claude Code** | `kakashi install --only claude` | Yes |
+| **Cursor** | `kakashi install --only cursor` | Yes |
+| **Codex CLI** | `kakashi install --only codex` | Yes |
+| **Windsurf** | `kakashi install --only windsurf --with-init` | With `--with-init` |
+| **Cline** | `kakashi install --only cline --with-init` | With `--with-init` |
+| **GitHub Copilot** | `kakashi install --only copilot --with-init` | With `--with-init` |
+| **Continue** | `kakashi install --only continue` | Yes (full rule in `systemMessage`) |
 
 Install all detected:
 
 ```bash
-node bin/install.js --all
+kakashi install --all
 ```
 
 ## Flags
 
 | Flag | What |
 |---|---|
-| `--all` | Install for all detected agents |
+| `--all` | Install for every supported agent, detected or not (default: detected ones) |
 | `--only <id>` | One agent (repeatable, or a comma-separated list). An unknown id is an error. |
-| `--dry-run` | Preview only |
+| `--dry-run` | Preview only: nothing is installed or written |
 | `--with-init` | Drop repo-level rules in `$PWD` |
-| `--uninstall` | Remove Kakashi config |
+| `--uninstall` | Remove Kakashi's rules and commands; scoped by `--only`, and by `--with-init` for repository files |
 | `--list` | Agent detection matrix |
-| `--force` | Re-install even if present |
+| `--force` | Accepted for old scripts; every run refreshes Kakashi's blocks |
+
+Any other option is refused (exit 2).
 
 ## Verify
 
 ```bash
-node bin/install.js --list
+kakashi install --list
 kakashi scan tests/fixtures/sample.txt
 ```
 
 ## Uninstall
 
 ```bash
-node bin/install.js --uninstall
+kakashi uninstall                  # every agent
+kakashi uninstall --only cursor    # one agent; the others are left alone
+kakashi uninstall --with-init      # also the rules written into this repository
 npm uninstall -g @muhammadatef/kakashi
 ```
 

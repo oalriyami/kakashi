@@ -2,7 +2,7 @@
  * MongoDB driver adapter.
  *
  * Requires the `mongodb` npm package:
- *   npm install mongodb
+ *   npm install -g mongodb   (optional; see ./missing.js)
  *
  * Connection string: mongodb://user:pass@host:port/db  OR  mongodb+srv://...
  *
@@ -11,12 +11,14 @@
  * This keeps the CLI shape consistent across SQL and NoSQL drivers.
  */
 
+const { missingDriver } = require('./missing');
+
 async function* query(conn, jsonQuery, options = {}) {
   let MongoClient;
   try {
     ({ MongoClient } = require('mongodb'));
   } catch (err) {
-    throw new Error("MongoDB driver requires the 'mongodb' package. Install with: npm install mongodb");
+    throw missingDriver('MongoDB', 'mongodb', 'Current versions need Node 20 or later');
   }
 
   let spec;

@@ -774,6 +774,26 @@ program
     process.on('SIGTERM', shutdown);
   });
 
+// ---------------------------------------------------------------------------
+// install / uninstall -- the agent rules and slash commands (#45). The
+// documented `npx … -- --uninstall` reached this CLI, which has no such
+// option, so there was no working way to uninstall.
+// ---------------------------------------------------------------------------
+for (const [name, extra, description] of [
+  ['install', [], 'Install Kakashi rules and slash commands into your AI agents (--all, --only <ids>, --with-init, --dry-run)'],
+  ['uninstall', ['--uninstall'], 'Remove Kakashi rules and slash commands from your AI agents (--only <ids>, --with-init, --dry-run)'],
+]) {
+  program
+    .command(name)
+    .description(description)
+    .allowUnknownOption()
+    .helpOption(false)
+    .argument('[options...]')
+    .action((_args, _opts, cmd) => {
+      require('./install').main([...extra, ...cmd.args]);
+    });
+}
+
 program
   .command('stats')
   .description('Show cumulative masking stats')

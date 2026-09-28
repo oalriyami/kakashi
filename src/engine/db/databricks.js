@@ -4,7 +4,7 @@ const { sqlWithLimit } = require('./limit');
  * Databricks SQL Warehouse driver adapter.
  *
  * Requires the `@databricks/sql` npm package:
- *   npm install @databricks/sql
+ *   npm install -g @databricks/sql   (optional; see ./missing.js)
  *
  * Connection string:
  *   databricks://<pat-token>@<host>/<http-path>
@@ -12,12 +12,14 @@ const { sqlWithLimit } = require('./limit');
  *   databricks://dapi1234@myworkspace.cloud.databricks.com/sql/1.0/warehouses/xxxx
  */
 
+const { missingDriver } = require('./missing');
+
 async function* query(conn, sql, options = {}) {
   let DBSQLClient;
   try {
     ({ DBSQLClient } = require('@databricks/sql'));
   } catch (err) {
-    throw new Error("Databricks driver requires the '@databricks/sql' package. Install with: npm install @databricks/sql");
+    throw missingDriver('Databricks', '@databricks/sql', 'Version 2.2 or later is recommended; it needs Node 20 or later');
   }
 
   const url = new URL(conn);

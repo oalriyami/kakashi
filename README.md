@@ -149,10 +149,14 @@ npx -y github:Muhammadatef/kakashi
 
 **~30 seconds. Requires a supported Node.js runtime (see the badge above). Safe to re-run.**
 
-Want to see what it will do first?
+Want to see what it will do first? `--dry-run` installs nothing and changes nothing:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Muhammadatef/kakashi/main/install.sh | bash -s -- --dry-run
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Muhammadatef/kakashi/main/install.ps1))) --dry-run
 ```
 
 Install for one agent only:
@@ -160,6 +164,8 @@ Install for one agent only:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Muhammadatef/kakashi/main/install.sh | bash -s -- --only cursor
 ```
+
+Already installed with npm? `kakashi install` does the same (`--all`, `--only <ids>`, `--with-init`, `--dry-run`); an unknown option is refused rather than ignored.
 
 ---
 
@@ -184,7 +190,7 @@ Then **re-run the installer** so your agents learn the new commands — the slas
 curl -fsSL https://raw.githubusercontent.com/Muhammadatef/kakashi/main/install.sh | bash
 
 # or, if you installed via npm and only want to refresh the agent rules
-node "$(npm root -g)/@muhammadatef/kakashi/bin/install.js" --all --force
+kakashi install
 ```
 
 Verify:
@@ -192,15 +198,15 @@ Verify:
 ```bash
 kakashi --version        # 1.3.1
 kakashi guard --help     # exists ⇒ the Guardian is installed
-node "$(npm root -g)/@muhammadatef/kakashi/bin/install.js" --list
+kakashi install --list
 ```
 
-**Upgrading is non-destructive.** Kakashi writes its agent rules between `<!-- kakashi-begin -->` / `<!-- kakashi-end -->` markers and replaces only that block, so your own `CLAUDE.md`, `AGENTS.md` and Cursor rules are left alone. No config migration is needed from 1.0 or 1.1 — every old command still works exactly as before.
+**Upgrading is non-destructive.** Kakashi writes its agent rules between `<!-- kakashi-begin -->` / `<!-- kakashi-end -->` markers and replaces only that block on every run (no `--force` needed), so your own `CLAUDE.md`, `AGENTS.md` and Cursor rules are left alone. No config migration is needed from 1.0 or 1.1 — every old command still works exactly as before.
 
 Upgrading from a clone instead:
 
 ```bash
-git pull && npm install && npm link && node bin/install.js --all --force
+git pull && npm install && npm link && kakashi install
 ```
 
 ---
@@ -610,7 +616,7 @@ Kakashi reads, masks, and **reconstructs** the original format. The file you get
 
 | Format | Read | Mask | Reconstruct | Status |
 |--------|:----:|:----:|:-----------:|--------|
-| Excel `.xlsx` `.xls` | yes | yes | full `.xlsx` | **stable** — cell-level masking, catches secrets embedded in narrative cells |
+| Excel `.xlsx` `.xls` | yes | yes | full `.xlsx` | **stable** — cell-level masking, catches secrets embedded in narrative cells; charts and drawings are kept. Legacy `.xls` / `.xlsb` need SheetJS: `npm install -g https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` |
 | CSV / TSV | yes | yes | same format | **stable** |
 | JSON / JSONL / JSON5 | yes | yes | same format | **stable** |
 | YAML / TOML | yes | yes | same format | **stable** |
@@ -871,13 +877,19 @@ It **adapts** to any format, any OS, any tool — because that's what copy ninja
 
 ```bash
 # Remove from all agents
-npx -y github:Muhammadatef/kakashi -- --uninstall
+kakashi uninstall
 
-# Or from one only
-npx -y github:Muhammadatef/kakashi -- --uninstall --only cursor
+# Or from one only -- the others keep their rules and commands
+kakashi uninstall --only cursor
+
+# Rules written into a repository with --with-init are removed with it too
+kakashi uninstall --with-init
 
 # And the package itself
 npm uninstall -g @muhammadatef/kakashi
+
+# Without the package installed: the one-liner uninstalls without installing
+curl -fsSL https://raw.githubusercontent.com/Muhammadatef/kakashi/main/install.sh | bash -s -- --uninstall
 ```
 
 Clean. Leaves no trace. Like a ninja.

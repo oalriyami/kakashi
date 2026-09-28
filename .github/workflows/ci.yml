@@ -60,25 +60,14 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: 'npm'
 
-      # Deliberately `npm install`, not `npm ci`.
-      #
-      # `npm ci` would be the reproducible choice, but it cannot be used while
-      # `snowflake-sdk` is an optionalDependency: npm resolves its transitive
-      # `gcp-metadata` to 6.1.1 while the tree asks for 5.3.0, and writes a
-      # lockfile that `npm ci` then rejects as out of sync. That happens even
-      # for a lockfile npm has just generated from a clean `npm install`, and
-      # `--omit=optional` does not help because `ci` validates the whole file
-      # before installing anything. Revisit if snowflake-sdk is dropped or the
-      # conflict is fixed upstream.
+      # `npm ci`: the lockfile is installed exactly. It could not be while
+      # snowflake-sdk was an optionalDependency (its transitive gcp-metadata
+      # left the lockfile out of sync); the database drivers are now optional
+      # peers (#46). The two drivers the suite runs against, pg and
+      # better-sqlite3, are devDependencies, so a driver that fails to install
+      # fails the build instead of quietly turning its tests into skips.
       - name: Install
-        run: npm install --no-audit --no-fund
-
-      # The database drivers are optionalDependencies, so `npm install` may or
-      # may not have landed them. Installing the two the suite can actually use
-      # explicitly means a missing driver fails the build instead of quietly
-      # turning the driver tests into skips.
-      - name: Install database drivers under test
-        run: npm install --no-save --no-audit --no-fund pg better-sqlite3
+        run: npm ci --no-audit --no-fund
 
       - name: Test
         run: npm test
@@ -90,3 +79,81 @@ jobs:
 
       - name: Smoke test — kakashi list-patterns
         run: node bin/kakashi.js list-patterns | head -30
+
+  # The one-line installers, run the way the README runs them: piped. A piped
+  # bash script has no BASH_SOURCE and `irm | iex` has no script path, and both
+  # of those used to break the install with nothing in CI to notice (#45).
+  # The package under test is packed and installed through KAKASHI_PACKAGE.
+  installers:
+    name: installers (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Pack the package under test
+        shell: bash
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          echo "KAKASHI_PACKAGE=$(ls "$RUNNER_TEMP"/*.tgz)" >> "$GITHUB_ENV"
+
+      - name: install.sh, piped to bash
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          # A mistyped option stops the script before anything happens.
+          if cat install.sh | bash -s -- --dryrun; then echo "--dryrun was accepted"; exit 1; fi
+          # --dry-run installs nothing and writes nothing.
+          cat install.sh | bash -s -- --dry-run --all
+          test ! -e "$HOME/.claude"
+          ! npm ls -g @muhammadatef/kakashi
+          # The real thing.
+          cat install.sh | bash -s -- --all
+          test "$(ls "$HOME/.claude/commands" | wc -l)" -eq 14
+          test "$(ls "$HOME/.cursor/commands" | wc -l)" -eq 14
+          # Uninstalling one agent leaves the others alone.
+          cat install.sh | bash -s -- --uninstall --only cursor
+          test "$(ls "$HOME/.cursor/commands" | wc -l)" -eq 0
+          test "$(ls "$HOME/.claude/commands" | wc -l)" -eq 14
+          kakashi uninstall
+          test ! -e "$HOME/.claude/commands/kakashi.md"
+
+      - name: install.ps1, piped to Invoke-Expression (Windows PowerShell)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = Get-Content install.ps1 -Raw
+          # A mistyped option stops the script before anything happens.
+          & ([scriptblock]::Create($script)) --dryrun
+          if ($LASTEXITCODE -ne 2) { throw "--dryrun: exit $LASTEXITCODE" }
+          # Plain `irm | iex`: no options, no script path.
+          $script | Invoke-Expression
+          if ($LASTEXITCODE -ne 0) { throw "iex: exit $LASTEXITCODE" }
+          & ([scriptblock]::Create($script)) --all
+          if ($LASTEXITCODE -ne 0) { throw "--all: exit $LASTEXITCODE" }
+          $n = (Get-ChildItem "$env:USERPROFILE\.claude\commands").Count
+          if ($n -ne 14) { throw "expected 14 Claude commands, found $n" }
+          & ([scriptblock]::Create($script)) --uninstall --only cursor
+          if ((Get-ChildItem "$env:USERPROFILE\.claude\commands").Count -ne 14) { throw 'uninstalling cursor touched Claude' }
+          kakashi uninstall
+          if (Test-Path "$env:USERPROFILE\.claude\commands\kakashi.md") { throw 'uninstall left Claude commands' }
+
+      - name: install.ps1 --dry-run (PowerShell 7)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & ([scriptblock]::Create((Get-Content install.ps1 -Raw))) --dry-run --all
+          if ($LASTEXITCODE -ne 0) { throw "--dry-run: exit $LASTEXITCODE" }

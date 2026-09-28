@@ -189,9 +189,9 @@ const PPTX_RULES = [
 ];
 
 /**
- * Excel. Cell values are read and written through SheetJS (./xlsx.js); these
- * rules cover everything around them. The two `read: false, mask: false` rules
- * exist only so the verifier also checks the cells of the rebuilt workbook.
+ * Excel. Cell values and sheet names are read and written by ./xlsx.js; these
+ * rules cover everything around them. The `read: false, mask: false` rule and
+ * the worksheet's `verifyElements` exist so the verifier also checks the cells.
  */
 const XLSX_RULES = [
   { type: /spreadsheetml\.comments\+xml$/, match: /^xl\/comments(\/comment)?\d+\.xml$/, runs: [SPREADSHEET_COMMENT], elements: ['author'] },
@@ -334,8 +334,8 @@ function orderKeys(replMap) {
 }
 
 // ---------------------------------------------------------------------------
-// Embedded packages. The xlsx handler lives in ./xlsx.js (it needs SheetJS for
-// the cells); required lazily because it requires this module too.
+// Embedded packages. The xlsx handler lives in ./xlsx.js (it reads the cells
+// itself); required lazily because it requires this module too.
 // ---------------------------------------------------------------------------
 
 async function readEmbedded(buf, kind) {

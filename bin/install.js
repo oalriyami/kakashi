@@ -1,3 +1,17 @@
+#!/usr/bin/env node
+/**
+ * Install Kakashi's rules and slash commands into the AI agents on this
+ * machine, or remove them.
+ *
+ *   kakashi install [--all | --only <ids>] [--with-init] [--dry-run]
+ *   kakashi uninstall [--only <ids>] [--with-init] [--dry-run]
+ *   kakashi-install ...            the same, as its own command
+ *   node bin/install.js ...        from a clone
+ *
+ * Everything it writes is either a whole file it owns or a block between
+ * `<!-- kakashi-begin -->` / `<!-- kakashi-end -->` markers, so re-running it
+ * refreshes that block and uninstalling removes exactly it (#45).
+ */
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -30,25 +44,47 @@ function writeFile(p, content) {
   fs.writeFileSync(p, content, 'utf8');
 }
 
+/** Wrap text in Kakashi's markers, unless it already carries them. */
+function marked(content) {
+  const body = content.trim();
+  return body.includes(MARKER_BEGIN) ? body : `${MARKER_BEGIN}\n${body}\n${MARKER_END}`;
+}
+
+/**
+ * Put Kakashi's block into a file, replacing the block an earlier install left
+ * there. Re-running used to keep the stale block unless `--force` was given,
+ * so an upgrade never reached the agents (#45).
+ */
 function appendMarkerBlock(filePath, blockContent) {
+  const block = marked(blockContent);
   const existing = readFile(filePath) || '';
-  if (existing.includes(MARKER_BEGIN)) {
-    if (opts.force) {
-      const stripped = stripMarkerBlock(existing);
-      writeFile(filePath, stripped.trimEnd() + '\n\n' + blockContent + '\n');
-    }
-    return false;
-  }
-  const sep = existing.length && !existing.endsWith('\n') ? '\n\n' : existing.length ? '\n' : '';
-  writeFile(filePath, existing + sep + blockContent + '\n');
+  const rest = stripMarkerBlock(existing).trimEnd();
+  writeFile(filePath, (rest ? `${rest}\n\n` : '') + block + '\n');
+  return !existing.includes(MARKER_BEGIN);
+}
+
+/** Remove Kakashi's block from a file; delete the file if nothing else is left. */
+function removeMarkerBlock(filePath) {
+  const content = readFile(filePath);
+  if (content === null || !content.includes(MARKER_BEGIN)) return false;
+  const rest = stripMarkerBlock(content).trim();
+  if (rest) writeFile(filePath, rest + '\n');
+  else fs.rmSync(filePath, { force: true });
   return true;
 }
 
+function removeFile(p) {
+  try { fs.unlinkSync(p); return true; } catch { return false; }
+}
+
 function stripMarkerBlock(content) {
-  const begin = content.indexOf(MARKER_BEGIN);
-  const end = content.indexOf(MARKER_END);
-  if (begin === -1 || end === -1) return content;
-  return content.slice(0, begin) + content.slice(end + MARKER_END.length);
+  let out = content;
+  for (;;) {
+    const begin = out.indexOf(MARKER_BEGIN);
+    const end = out.indexOf(MARKER_END, begin);
+    if (begin === -1 || end === -1) return out;
+    out = out.slice(0, begin).trimEnd() + '\n' + out.slice(end + MARKER_END.length).replace(/^\n+/, '\n');
+  }
 }
 
 function copyFile(src, dest) {
@@ -105,6 +141,12 @@ function copySlashCommands(targetDir) {
     if (!fs.existsSync(src)) continue;
     copyFile(src, path.join(targetDir, `${cmd}.md`));
   }
+}
+
+function removeSlashCommands(targetDir) {
+  let n = 0;
+  for (const cmd of SLASH_CMDS) if (removeFile(path.join(targetDir, `${cmd}.md`))) n++;
+  return n;
 }
 
 function installClaude() {
@@ -181,24 +223,95 @@ function installCopilot() {
   console.log('  [ok] GitHub Copilot (repo instructions)');
 }
 
+/**
+ * Remove the unmarked `[Kakashi] …` note installs before #45 appended to
+ * Continue's systemMessage: the first 500 characters of the rule and `...`.
+ */
+function stripLegacyContinueNote(message) {
+  const at = message.indexOf('[Kakashi] ');
+  if (at === -1) return message;
+  const tail = message.slice(at);
+  const end = tail.search(/\.\.\.(?=\s*$|\n\n)/);
+  if (end === -1 || end > 600) return message;
+  return (message.slice(0, at) + tail.slice(end + 3)).trim();
+}
+
 function installContinue() {
   const configPath = path.join(homeDir, '.continue', 'config.json');
   if (!fs.existsSync(configPath)) {
     console.log('  [skip] Continue: ~/.continue/config.json not found. Open Continue once so it creates its config.');
     return;
   }
+  let config;
   try {
-    const config = JSON.parse(readFile(configPath));
-    const body = readFile(path.join(ROOT, 'src', 'rules', 'kakashi-activate.md')) || '';
-    const note = `[Kakashi] ${body.slice(0, 500)}...`;
-    if (!config.systemMessage || !config.systemMessage.includes('Kakashi')) {
-      config.systemMessage = (config.systemMessage || '') + '\n\n' + note;
-      if (!opts.dryRun) writeFile(configPath, JSON.stringify(config, null, 2));
-    }
-    console.log('  [ok] Continue');
+    config = JSON.parse(readFile(configPath));
   } catch {
-    console.log('  [warn] Continue (config parse skipped)');
+    console.log('  [warn] Continue: ~/.continue/config.json is not valid JSON; left unchanged.');
+    return;
   }
+  // The whole rule, between markers: it used to be cut at 500 characters,
+  // and without markers it could be neither refreshed nor removed (#45).
+  const body = readFile(path.join(ROOT, 'src', 'rules', 'kakashi-activate.md')) || '';
+  const rest = stripLegacyContinueNote(stripMarkerBlock(config.systemMessage || '')).trim();
+  config.systemMessage = (rest ? `${rest}\n\n` : '') + marked(body);
+  writeFile(configPath, JSON.stringify(config, null, 2));
+  console.log('  [ok] Continue  (full rule in systemMessage)');
+}
+
+// ---- Uninstall, one agent at a time (#45) --------------------------------
+// `--uninstall --only cursor` used to remove every agent's commands, Claude's
+// included; Continue and the repository files --with-init writes were never
+// removed. Each agent now removes exactly what its installer wrote.
+
+function uninstallClaude() {
+  const configDir = opts.configDir || path.join(homeDir, '.claude');
+  const rule = removeMarkerBlock(path.join(configDir, 'CLAUDE.md'));
+  const n = removeSlashCommands(path.join(configDir, 'commands'));
+  removeFile(path.join(configDir, 'kakashi-active'));
+  return rule || n > 0;
+}
+
+function uninstallFiles(ruleFile, commandsDir, repoRuleFile, repoCommandsDir) {
+  let any = removeFile(path.join(homeDir, ruleFile)) | removeSlashCommands(path.join(homeDir, commandsDir));
+  if (opts.withInit) {
+    any |= removeFile(path.join(process.cwd(), repoRuleFile)) | removeSlashCommands(path.join(process.cwd(), repoCommandsDir));
+  }
+  return Boolean(any);
+}
+
+function uninstallCodex() {
+  let any = removeMarkerBlock(path.join(homeDir, '.codex', 'AGENTS.md'))
+    | removeSlashCommands(path.join(homeDir, '.codex', 'commands'));
+  if (opts.withInit) {
+    any |= removeMarkerBlock(path.join(process.cwd(), 'AGENTS.md'))
+      | removeSlashCommands(path.join(process.cwd(), '.codex', 'commands'));
+  }
+  return Boolean(any);
+}
+
+function uninstallCline() {
+  if (!opts.withInit) return false;
+  return Boolean(removeFile(path.join(process.cwd(), '.clinerules', 'kakashi.md'))
+    | removeSlashCommands(path.join(process.cwd(), '.clinerules', 'commands')));
+}
+
+function uninstallCopilot() {
+  return opts.withInit && removeMarkerBlock(path.join(process.cwd(), '.github', 'copilot-instructions.md'));
+}
+
+function uninstallContinue() {
+  const configPath = path.join(homeDir, '.continue', 'config.json');
+  const raw = readFile(configPath);
+  if (raw === null) return false;
+  let config;
+  try { config = JSON.parse(raw); } catch { return false; }
+  const before = config.systemMessage || '';
+  const after = stripLegacyContinueNote(stripMarkerBlock(before)).trim();
+  if (after === before.trim()) return false;
+  if (after) config.systemMessage = after;
+  else delete config.systemMessage;
+  writeFile(configPath, JSON.stringify(config, null, 2));
+  return true;
 }
 
 const AGENTS = [
@@ -207,76 +320,70 @@ const AGENTS = [
     name: 'Claude Code',
     detect: () => which('claude') || fs.existsSync(path.join(homeDir, '.claude')),
     install: installClaude,
+    uninstall: uninstallClaude,
   },
   {
     id: 'cursor',
     name: 'Cursor',
     detect: () => which('cursor') || fs.existsSync(path.join(homeDir, '.cursor')),
     install: installCursor,
+    uninstall: () => uninstallFiles(path.join('.cursor', 'rules', 'kakashi.mdc'), path.join('.cursor', 'commands'),
+      path.join('.cursor', 'rules', 'kakashi.mdc'), path.join('.cursor', 'commands')),
   },
   {
     id: 'codex',
     name: 'OpenAI Codex CLI',
     detect: () => which('codex') || fs.existsSync(path.join(homeDir, '.codex')),
     install: installCodex,
+    uninstall: uninstallCodex,
   },
   {
     id: 'windsurf',
     name: 'Windsurf',
     detect: () => which('windsurf') || fs.existsSync(path.join(homeDir, '.windsurf')),
     install: installWindsurf,
+    uninstall: () => uninstallFiles(path.join('.windsurf', 'rules', 'kakashi.md'), path.join('.windsurf', 'commands'),
+      path.join('.windsurf', 'rules', 'kakashi.md'), path.join('.windsurf', 'commands')),
   },
   {
     id: 'cline',
     name: 'Cline',
     detect: () => opts.withInit,
     install: installCline,
+    uninstall: uninstallCline,
   },
   {
     id: 'copilot',
     name: 'GitHub Copilot',
     detect: () => which('gh') || opts.withInit,
     install: installCopilot,
+    uninstall: uninstallCopilot,
   },
   {
     id: 'continue',
     name: 'Continue',
     detect: () => fs.existsSync(path.join(homeDir, '.continue')),
     install: installContinue,
+    uninstall: uninstallContinue,
   },
 ];
 
-function uninstall() {
-  console.log('\nUninstalling Kakashi...\n');
-  const configDir = opts.configDir || path.join(homeDir, '.claude');
-  const claudeMd = path.join(configDir, 'CLAUDE.md');
-  const content = readFile(claudeMd);
-  if (content) writeFile(claudeMd, stripMarkerBlock(content).trimEnd() + '\n');
-
-  const cmdDirs = [
-    path.join(configDir, 'commands'),
-    path.join(homeDir, '.cursor', 'commands'),
-    path.join(homeDir, '.codex', 'commands'),
-    path.join(homeDir, '.windsurf', 'commands'),
-  ];
-  for (const dir of cmdDirs) {
-    for (const cmd of SLASH_CMDS) {
-      try { fs.unlinkSync(path.join(dir, `${cmd}.md`)); } catch { /* */ }
+function uninstall(targets) {
+  console.log('\nKakashi — Uninstalling\n');
+  if (opts.dryRun) console.log('[dry-run mode — no files changed]\n');
+  for (const agent of targets) {
+    if (opts.dryRun) {
+      console.log(`  [dry-run] Would remove Kakashi from: ${agent.name}`);
+      continue;
+    }
+    try {
+      console.log(agent.uninstall() ? `  [ok] ${agent.name}: removed` : `  [--] ${agent.name}: nothing to remove`);
+    } catch (err) {
+      console.log(`  [fail] ${agent.name}: ${err.message}`);
+      process.exitCode = 1;
     }
   }
-  try { fs.unlinkSync(path.join(configDir, 'kakashi-active')); } catch { /* */ }
-
-  const codex = readFile(path.join(homeDir, '.codex', 'AGENTS.md'));
-  if (codex) writeFile(path.join(homeDir, '.codex', 'AGENTS.md'), stripMarkerBlock(codex).trimEnd() + '\n');
-
-  const toDelete = [
-    path.join(homeDir, '.cursor', 'rules', 'kakashi.mdc'),
-    path.join(homeDir, '.windsurf', 'rules', 'kakashi.md'),
-  ];
-  for (const p of toDelete) {
-    try { fs.unlinkSync(p); } catch { /* */ }
-  }
-  console.log('Done.\n');
+  console.log(opts.withInit ? '\nDone.\n' : '\nDone. Repository files from --with-init are removed with --with-init too.\n');
 }
 
 function listAgents() {
@@ -288,6 +395,16 @@ function listAgents() {
   console.log('');
 }
 
+const FLAGS = new Set([
+  '--all', '--dry-run', '--with-init', '--minimal', '--uninstall', '--list', '--force',
+  '--non-interactive', '--only', '--config-dir', '--help', '-h',
+]);
+
+/**
+ * Parse the command line. An unknown flag is an error: `--dryrun` used to be
+ * ignored and the install went ahead for real (#45).
+ * @throws {Error}
+ */
 function parseArgs(argv) {
   const result = {
     all: false,
@@ -300,37 +417,59 @@ function parseArgs(argv) {
     force: false,
     nonInteractive: false,
     configDir: null,
+    help: false,
+  };
+  const value = (i, flag) => {
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith('--')) throw new Error(`${flag} needs a value`);
+    return v;
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (!FLAGS.has(arg)) throw new Error(`Unknown option: ${arg}`);
     if (arg === '--all') result.all = true;
     else if (arg === '--dry-run') result.dryRun = true;
     else if (arg === '--with-init') result.withInit = true;
     else if (arg === '--minimal') result.minimal = true;
     else if (arg === '--uninstall') result.uninstall = true;
     else if (arg === '--list') result.list = true;
-    else if (arg === '--force') result.force = true;
+    else if (arg === '--force') result.force = true; // blocks are always refreshed now; kept for old scripts
     else if (arg === '--non-interactive') result.nonInteractive = true;
-    else if (arg === '--only') result.only.push(...String(argv[++i] || '').split(',').map((s) => s.trim()).filter(Boolean));
-    else if (arg === '--config-dir') result.configDir = argv[++i]?.replace(/^~/, homeDir);
+    else if (arg === '--help' || arg === '-h') result.help = true;
+    else if (arg === '--only') result.only.push(...value(i++, arg).split(',').map((s) => s.trim()).filter(Boolean));
+    else if (arg === '--config-dir') result.configDir = value(i++, arg).replace(/^~/, homeDir);
   }
   return result;
 }
 
-function main() {
-  opts = parseArgs(process.argv.slice(2));
+const USAGE = `Usage: kakashi install [options]      (or: kakashi-install, node bin/install.js)
+       kakashi uninstall [options]
 
-  if (opts.list) {
-    listAgents();
+  --all              every supported agent, detected or not
+  --only <ids>       comma-separated: ${'${IDS}'}
+  --with-init        also write (or remove) the rule files in the current repository
+  --dry-run          show what would be done; change nothing
+  --list             show which agents are detected
+  --uninstall        remove Kakashi's rules and commands (scoped by --only)
+  --config-dir <dir> Claude Code's config directory (default ~/.claude)
+`;
+
+function main(argv = process.argv.slice(2)) {
+  try {
+    opts = parseArgs(argv);
+  } catch (err) {
+    console.error(`\n${err.message}\n`);
+    console.error(USAGE.replace('${IDS}', AGENTS.map((a) => a.id).join(', ')));
+    process.exitCode = 2;
+    return;
+  }
+  if (opts.help) {
+    console.log(USAGE.replace('${IDS}', AGENTS.map((a) => a.id).join(', ')));
     return;
   }
 
-  if (opts.uninstall) {
-    if (opts.dryRun) {
-      console.log('[dry-run] Would uninstall Kakashi');
-      return;
-    }
-    uninstall();
+  if (opts.list) {
+    listAgents();
     return;
   }
 
@@ -341,7 +480,12 @@ function main() {
     console.error(`\nUnknown agent id: ${unknown.join(', ')}`);
     console.error(`Supported: ${AGENTS.map((a) => a.id).join(', ')}`);
     console.error('Other agents can use Kakashi through their own rules file: see "Other agents" in the README.\n');
-    process.exitCode = 1;
+    process.exitCode = 2;
+    return;
+  }
+
+  if (opts.uninstall) {
+    uninstall(opts.only.length ? AGENTS.filter((a) => opts.only.includes(a.id)) : AGENTS);
     return;
   }
 
@@ -368,6 +512,7 @@ function main() {
         agent.install();
       } catch (err) {
         console.log(`  [fail] ${agent.name}: ${err.message}`);
+        process.exitCode = 1;
       }
     }
   }
@@ -375,4 +520,6 @@ function main() {
   console.log('\nDone. Run: kakashi scan <file>\n');
 }
 
-main();
+module.exports = { main, parseArgs, AGENTS, SLASH_CMDS };
+
+if (require.main === module) main();

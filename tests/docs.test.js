@@ -96,7 +96,7 @@ function runDocsTests() {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kakashi-install-'));
     const r = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'install.js'), '--only', 'aider', '--dry-run'],
       { encoding: 'utf8', env: { ...process.env, HOME: home, USERPROFILE: home } });
-    assert.strictEqual(r.status, 1, `exit ${r.status}`);
+    assert.strictEqual(r.status, 2, `exit ${r.status}`);
     assert(/Unknown agent id: aider/.test(r.stderr), r.stderr);
   });
 

@@ -186,7 +186,8 @@ The `readFile` extracts a canonical text representation; `writeMasked` reconstru
 | Format | Library | Status | Notes |
 | --- | --- | --- | --- |
 | Text / code (40+ ext) | native `fs` | stable | Any text-shaped file |
-| Excel (`.xlsx`, `.xls`) | SheetJS | stable | Cell-level masking |
+| Excel (`.xlsx`, `.xlsm`) | Kakashi's OOXML reader (JSZip) | stable | Cell-level masking; charts and drawings kept |
+| Excel (`.xls`, `.xlsb`) | SheetJS (optional: `npm install -g https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`) | stable | Cell-level masking |
 | Word (`.docx`) | `jszip` | best-effort | XML `<w:t>` replacement |
 | PowerPoint (`.pptx`) | `jszip` | best-effort | XML `<a:t>` replacement |
 | PDF (`.pdf`) | `pdf-parse` | text-only | Extracts to masked `.md`; real round-trip in v1.2 |
@@ -230,12 +231,12 @@ Drivers are lazily `require()`-d, so users only install the client library for t
 
 | Driver | Library | Install |
 | --- | --- | --- |
-| PostgreSQL | `pg` | `npm install pg` |
-| MySQL / MariaDB | `mysql2` | `npm install mysql2` |
-| MongoDB | `mongodb` | `npm install mongodb` |
-| Snowflake | `snowflake-sdk` | `npm install snowflake-sdk` |
-| Databricks | `@databricks/sql` | `npm install @databricks/sql` |
-| SQLite | `better-sqlite3` | `npm install better-sqlite3` |
+| PostgreSQL | `pg` | `npm install -g pg` |
+| MySQL / MariaDB | `mysql2` | `npm install -g mysql2` |
+| MongoDB | `mongodb` | `npm install -g mongodb` |
+| Snowflake | `snowflake-sdk` | `npm install -g snowflake-sdk` (Node 20+) |
+| Databricks | `@databricks/sql` | `npm install -g @databricks/sql` (2.2+, Node 20+) |
+| SQLite | `better-sqlite3` | `npm install -g better-sqlite3` |
 
 ### 5.2 CLI usage
 

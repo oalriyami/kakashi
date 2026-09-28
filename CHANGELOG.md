@@ -114,6 +114,28 @@ to 3.
 
 ### Fixed
 
+- **The installers and uninstall work as documented** (#45).
+  - `curl … | bash` stopped at `BASH_SOURCE[0]: unbound variable` and fell back
+    to a command the CLI rejects, so no rules were installed; `install.ps1`
+    relied on a script path that is empty under `irm | iex`. Both now install
+    the package and run its installer from the global npm folder, check every
+    step's exit code, never call `exit` in the caller's PowerShell session,
+    and refuse an unknown option before doing anything (`--dryrun` used to
+    install for real). `--dry-run` and `--uninstall` never install the
+    package.
+  - `kakashi install` and `kakashi uninstall` (and a `kakashi-install` command)
+    run the agent installer; the documented `npx … -- --uninstall` reached the
+    CLI, which has no such option.
+  - `--uninstall --only cursor` removed every agent's slash commands, Claude's
+    included; each agent now removes exactly what it installed, and
+    `--with-init` files in the repository and Continue's rule are removed too.
+  - Re-running refreshes Kakashi's marked block without `--force` (the stale
+    rule used to stay), and Continue receives the whole rule between markers
+    instead of its first 500 characters.
+  - An unknown option or `--only` id exits 2 (was 1, or ignored).
+  - A new CI job pipes `install.sh` to bash and `install.ps1` to
+    `Invoke-Expression` (Windows PowerShell and PowerShell 7) against the
+    package being built.
 - **Masked JSON, YAML, TOML, CSV, TSV and database exports stay valid** (#43).
   A replacement is now fitted to where it lands (new
   `src/engine/formats/structure.js`, chosen by file extension):
@@ -522,6 +544,32 @@ to 3.
   `Ali` would have rewritten `Alignment`. Name-like values are now replaced as
   whole words; values containing digits or symbols (secrets) keep substring
   replacement.
+
+### Security
+
+- **No dependency with open advisories on the default install, and no
+  database drivers pulled in by it** (#46). `npm audit --omit=dev` reported
+  14 advisories (6 high); it now reports none, and a global install is 81
+  packages (40 MB) instead of 433 (205 MB).
+  - `.xlsx` / `.xlsm` workbooks are read and masked by Kakashi's own OOXML
+    code (JSZip, as `.docx` and `.pptx` already were) instead of SheetJS
+    0.18.5 -- the last version on npm, with open prototype-pollution and ReDoS
+    advisories in exactly this job, parsing untrusted files. Cells are
+    rewritten in place, so charts, drawings and pivot caches are kept (SheetJS
+    rebuilt the file from its model and dropped them); a masked number becomes
+    an inline string, and a sheet whose name held a detected value is renamed
+    with every formula, defined name, chart series and pivot source that refers
+    to it. Findings are identical to SheetJS's on every workbook tested.
+  - SheetJS is now an optional peer dependency, needed only for legacy `.xls`
+    and `.xlsb` workbooks; without it Kakashi says how to install the fixed
+    version (`npm install -g https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`)
+    and exits 2.
+  - The six database drivers are optional peer dependencies instead of
+    optional dependencies, which npm installs by default. A missing driver is
+    named with its install command (`npm install -g pg`); the Snowflake,
+    Databricks and current MongoDB clients need Node 20 or later.
+  - The lockfile takes `brace-expansion` 2.1.7 (the glob advisory), and CI
+    installs with `npm ci`, which the old snowflake-sdk tree made impossible.
 
 ## [1.3.1] — 2026-09-23
 

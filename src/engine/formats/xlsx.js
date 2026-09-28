@@ -1,8 +1,23 @@
+/**
+ * Excel workbooks.
+ *
+ * .xlsx / .xlsm / .xltx / .xltm are zip packages of XML, read and masked here
+ * with the same OOXML machinery as .docx and .pptx (#46). They used to go
+ * through SheetJS 0.18.5 -- the last version on npm, with open prototype-
+ * pollution and ReDoS advisories on exactly this job, parsing untrusted files
+ * -- which also rebuilt the package from its own model and so dropped every
+ * part it did not model (drawings, charts, pivot caches). Now the cells are
+ * rewritten in place and every other part is kept.
+ *
+ * Legacy binary workbooks (.xls, .xlsb) still need SheetJS, an optional peer
+ * dependency: see ./xlsx-legacy.js.
+ */
 const fs = require('fs');
 const path = require('path');
-const XLSX = require('xlsx');
 const JSZip = require('jszip');
 const pkg = require('./package');
+const ooxml = require('./ooxml');
+const legacy = require('./xlsx-legacy');
 const { writeFileSafe } = require('../../lib/safe-write');
 const { occurrences, replaceOccurrences } = require('./replace');
 
@@ -15,83 +30,189 @@ const { occurrences, replaceOccurrences } = require('./replace');
  */
 const CELL_SEPARATOR = ' | ';
 
-/** Characters Excel does not allow in a sheet name, and its length limit. */
-const SHEET_NAME_ILLEGAL = /[[\]:*?/\\]/g;
-const SHEET_NAME_MAX = 31;
+const { retarget, SHEET_NAME_ILLEGAL, SHEET_NAME_MAX } = legacy;
 
 const isZip = (buf) => buf.length > 1 && buf[0] === 0x50 && buf[1] === 0x4b;
 
-/** Cell text, one row per line, one blank line between sheets. */
-function cellText(wb) {
-  const cells = {};
-  const sheetTexts = [];
-  for (const sheetName of wb.SheetNames) {
-    cells[sheetName] = {};
-    const sheet = wb.Sheets[sheetName];
-    if (!sheet || !sheet['!ref']) continue;
-    const range = XLSX.utils.decode_range(sheet['!ref']);
-    const rows = [];
-    for (let r = range.s.r; r <= range.e.r; r++) {
-      const row = [];
-      for (let c = range.s.c; c <= range.e.c; c++) {
-        const addr = XLSX.utils.encode_cell({ r, c });
-        const cell = sheet[addr];
-        const val = cell && cell.v != null ? String(cell.v) : '';
-        if (val) cells[sheetName][addr] = val;
-        // Empty cells stay as empty fields so every row keeps its columns.
-        row.push(val);
-      }
-      if (row.some(Boolean)) rows.push(row.join(CELL_SEPARATOR));
-    }
-    if (rows.length) sheetTexts.push(rows.join('\n'));
+// ---------------------------------------------------------------------------
+// XML helpers
+// ---------------------------------------------------------------------------
+
+/** Attributes of a start tag, by name. */
+function attrsOf(tag) {
+  const out = {};
+  for (const m of tag.matchAll(/([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g)) {
+    out[m[1]] = ooxml.decodeXml(m[3] !== undefined ? m[3] : m[4]);
   }
-  // A blank line between sheets, so each sheet's first row is its own header.
-  return { text: sheetTexts.join('\n\n'), cells };
+  return out;
 }
 
-const STRING_PROPS = (props) => Object.entries(props || {})
-  .filter(([, v]) => typeof v === 'string')
-  .map(([k]) => k);
+/** The text of a shared-string item or an inline string: its <t> runs, not phonetic ones. */
+function runsText(xml) {
+  const body = xml.replace(/<rPh\b[\s\S]*?<\/rPh>/g, '');
+  let text = '';
+  for (const m of body.matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)) text += ooxml.decodeXml(m[1]);
+  return text;
+}
+
+const tNode = (text) => `<t xml:space="preserve">${ooxml.encodeXml(text)}</t>`;
+
+/** `B12` -> { r: 11, c: 1 }. */
+function decodeRef(ref) {
+  const m = /^\$?([A-Z]{1,3})\$?(\d+)$/i.exec(ref || '');
+  if (!m) return null;
+  let c = 0;
+  for (const ch of m[1].toUpperCase()) c = c * 26 + (ch.charCodeAt(0) - 64);
+  return { r: Number(m[2]) - 1, c: c - 1 };
+}
+
+function encodeRef(r, c) {
+  let s = '';
+  for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return `${s}${r + 1}`;
+}
+
+// ---------------------------------------------------------------------------
+// The package: sheets, shared strings, cells
+// ---------------------------------------------------------------------------
+
+/** Sheets in workbook order: { name, path }. */
+async function sheetsOf(zip) {
+  const wbXml = await zip.file('xl/workbook.xml').async('string');
+  const relsFile = zip.file('xl/_rels/workbook.xml.rels');
+  const rels = {};
+  if (relsFile) {
+    for (const m of (await relsFile.async('string')).matchAll(/<Relationship\b[^>]*>/g)) {
+      const a = attrsOf(m[0]);
+      if (a.Id && a.Target) rels[a.Id] = a.Target;
+    }
+  }
+  const sheets = [];
+  for (const m of wbXml.matchAll(/<sheet\b[^>]*>/g)) {
+    const a = attrsOf(m[0]);
+    // The relationship id attribute is `r:id` whatever prefix the file binds.
+    const rid = a['r:id'] || Object.entries(a).find(([k]) => /:id$/.test(k))?.[1];
+    const target = rels[rid];
+    if (!target) continue;
+    const p = target.startsWith('/') ? target.slice(1) : path.posix.normalize(`xl/${target}`);
+    sheets.push({ name: a.name, path: p });
+  }
+  return sheets;
+}
+
+/** Shared-string items: { start, end } of each <si> element and its text. */
+function sharedStrings(xml) {
+  const items = [];
+  for (const m of xml.matchAll(/<si\b[^>]*?(?:\/>|>([\s\S]*?)<\/si>)/g)) {
+    items.push({ start: m.index, end: m.index + m[0].length, text: m[1] ? runsText(m[1]) : '' });
+  }
+  return items;
+}
 
 /**
- * Everything outside the cells, from the SheetJS model. Used for legacy .xls
- * workbooks, which are not zip packages; for .xlsx the package reader in
- * ./package.js covers the same ground and more.
+ * Every cell of a worksheet: position, type, value text, and where the element
+ * sits in the XML. Cells without an `r` attribute take the next column of
+ * their row, as Excel does.
  */
-function modelText(wb) {
-  const lines = [...wb.SheetNames];
-  for (const k of STRING_PROPS(wb.Props)) lines.push(wb.Props[k]);
-  for (const k of STRING_PROPS(wb.Custprops)) lines.push(wb.Custprops[k]);
-  for (const n of (wb.Workbook && wb.Workbook.Names) || []) if (n.Ref) lines.push(n.Ref);
-  for (const sheetName of wb.SheetNames) {
-    const sheet = wb.Sheets[sheetName] || {};
-    for (const [addr, cell] of Object.entries(sheet)) {
-      if (addr[0] === '!' || !cell) continue;
-      if (cell.f) lines.push(cell.f);
-      if (cell.l) lines.push(cell.l.Target || '', cell.l.Tooltip || '');
-      for (const c of cell.c || []) lines.push(c.a || '', c.t || '');
+function cellsOf(xml, sst) {
+  const cells = [];
+  let row = -1;
+  for (const rm of xml.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)) {
+    const ra = attrsOf(rm[1]);
+    row = ra.r ? Number(ra.r) - 1 : row + 1;
+    if (!rm[2]) continue;
+    const base = rm.index + rm[0].indexOf('>') + 1;
+    let col = -1;
+    for (const cm of rm[2].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      const a = attrsOf(cm[1]);
+      const pos = decodeRef(a.r) || { r: row, c: col + 1 };
+      col = pos.c;
+      const inner = cm[2] || '';
+      const v = /<v>([^<]*)<\/v>/.exec(inner);
+      const raw = v ? ooxml.decodeXml(v[1]) : null;
+      const type = a.t || 'n';
+      let text = '';
+      if (type === 's') text = raw !== null && sst[Number(raw)] ? sst[Number(raw)].text : '';
+      else if (type === 'inlineStr') text = runsText((/<is>([\s\S]*?)<\/is>/.exec(inner) || [])[1] || '');
+      else if (type === 'b') text = raw === null ? '' : (raw === '1' ? 'true' : 'false');
+      else if (type === 'n') text = raw === null ? '' : (Number.isFinite(Number(raw)) && raw.trim() !== '' ? String(Number(raw)) : raw);
+      else text = raw || '';
+      cells.push({
+        r: pos.r, c: pos.c, type, text, raw, hasFormula: /<f\b/.test(inner),
+        start: base + cm.index, end: base + cm.index + cm[0].length, attrs: cm[1], inner,
+      });
     }
   }
-  return lines.filter((l) => l && l.trim()).join('\n');
+  return cells;
 }
+
+/** One sheet's cells as text: a row per line, cells joined by CELL_SEPARATOR. */
+function sheetText(cells) {
+  const filled = cells.filter((x) => x.text !== '');
+  if (filled.length === 0) return '';
+  const minC = Math.min(...cells.map((x) => x.c));
+  const maxC = Math.max(...filled.map((x) => x.c));
+  const byRow = new Map();
+  for (const x of filled) {
+    if (!byRow.has(x.r)) byRow.set(x.r, new Map());
+    byRow.get(x.r).set(x.c, x.text);
+  }
+  const lines = [];
+  for (const r of [...byRow.keys()].sort((a, b) => a - b)) {
+    const row = byRow.get(r);
+    const fields = [];
+    // Empty cells stay as empty fields so every row keeps its columns.
+    for (let c = minC; c <= maxC; c++) fields.push(row.get(c) || '');
+    lines.push(fields.join(CELL_SEPARATOR));
+  }
+  return lines.join('\n');
+}
+
+/** Is this a workbook this module reads itself (an OOXML package with XML parts)? */
+function isOoxmlWorkbook(zip) {
+  return Boolean(zip.file('xl/workbook.xml'));
+}
+
+// ---------------------------------------------------------------------------
+// Read
+// ---------------------------------------------------------------------------
 
 /**
  * Read a workbook: its cells, plus every other part that carries text
  * (comments, formulas, sheet names, drawings, properties, link targets...).
  * @param {Buffer} buf
+ * @returns {Promise<{ text: string, cells: object, unscanned: string[] }>}
  */
 async function readXlsxBuffer(buf) {
-  const wb = XLSX.read(buf, { type: 'buffer' });
-  const { text: cells_, cells } = cellText(wb);
-  let rest = { text: modelText(wb), unscanned: [] };
-  if (isZip(buf)) rest = await pkg.readPackage(buf, 'xlsx');
-  const text = [cells_, rest.text].filter(Boolean).join('\n\n');
-  return { text, wb, cells, unscanned: rest.unscanned };
+  if (!isZip(buf)) return legacy.readXlsxBuffer(buf);
+  const zip = await JSZip.loadAsync(buf);
+  if (!isOoxmlWorkbook(zip)) return legacy.readXlsxBuffer(buf); // .xlsb: binary parts
+  const sstFile = zip.file('xl/sharedStrings.xml');
+  const sst = sstFile ? sharedStrings(await sstFile.async('string')) : [];
+  const cells = {};
+  const texts = [];
+  for (const sheet of await sheetsOf(zip)) {
+    const file = zip.file(sheet.path);
+    if (!file) continue;
+    const list = cellsOf(await file.async('string'), sst);
+    cells[sheet.name] = {};
+    for (const x of list) if (x.text !== '') cells[sheet.name][encodeRef(x.r, x.c)] = x.text;
+    const t = sheetText(list);
+    if (t) texts.push(t);
+  }
+  const rest = await pkg.readPackage(buf, 'xlsx');
+  // A blank line between sheets, so each sheet's first row is its own header.
+  const text = [texts.join('\n\n'), rest.text].filter(Boolean).join('\n\n');
+  return { text, cells, unscanned: rest.unscanned };
 }
 
 async function readXlsx(filePath) {
   return readXlsxBuffer(fs.readFileSync(filePath));
 }
+
+// ---------------------------------------------------------------------------
+// Mask
+// ---------------------------------------------------------------------------
 
 function makeMasker(replMap) {
   // Longest first, so a short value that is a substring of a longer one cannot
@@ -105,23 +226,29 @@ function makeMasker(replMap) {
   };
 }
 
-const quoteSheet = (name) => (/^[A-Za-z_][A-Za-z0-9_.]*$/.test(name) ? name : `'${name.replace(/'/g, "''")}'`);
-const escRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Replace every match of `rx` in `xml` whose (decoded) text changes under `fn`. */
+function rewriteTexts(xml, rx, fn) {
+  return xml.replace(rx, (whole, open, body, close) => {
+    const text = ooxml.decodeXml(body);
+    const next = fn(text);
+    return next === text ? whole : `${open}${ooxml.encodeXml(next)}${close}`;
+  });
+}
 
 /**
- * Rename every sheet whose name holds a detected value.
- *
- * A token like `[EMAIL_1]` is not a legal sheet name (Excel forbids `[ ] : * ?
- * / \` and more than 31 characters), and a sheet name is also referenced from
- * formulas and defined names, so it cannot simply be substituted in the XML.
- * The replacement is made legal, kept unique, and every reference is updated.
- *
- * @returns {Map<string,string>} old name -> new name
+ * Rename every sheet whose name holds a detected value, and point every
+ * reference at the new name: formulas, defined names, chart series and pivot
+ * sources. A token like `[EMAIL_1]` is not a legal sheet name (Excel forbids
+ * `[ ] : * ? / \` and more than 31 characters), so the replacement is made
+ * legal and unique first.
  */
-function renameSheets(wb, mask) {
+async function renameSheets(zip, mask) {
+  const wbFile = zip.file('xl/workbook.xml');
+  let wbXml = await wbFile.async('string');
+  const names = [...wbXml.matchAll(/<sheet\b[^>]*>/g)].map((m) => attrsOf(m[0]).name).filter(Boolean);
+  const taken = new Set(names);
   const renames = new Map();
-  const taken = new Set(wb.SheetNames);
-  wb.SheetNames.forEach((name, i) => {
+  names.forEach((name, i) => {
     const masked = mask(name);
     if (masked === name) return;
     const base = masked.replace(SHEET_NAME_ILLEGAL, '').replace(/^'+|'+$/g, '').trim().slice(0, SHEET_NAME_MAX) || `Sheet${i + 1}`;
@@ -132,110 +259,117 @@ function renameSheets(wb, mask) {
   });
   if (renames.size === 0) return renames;
 
-  wb.SheetNames = wb.SheetNames.map((n) => renames.get(n) || n);
-  for (const [from, to] of renames) {
-    wb.Sheets[to] = wb.Sheets[from];
-    delete wb.Sheets[from];
-  }
-  for (const s of (wb.Workbook && wb.Workbook.Sheets) || []) {
-    if (s.name && renames.has(s.name)) s.name = renames.get(s.name);
+  const retargetAll = (s) => retarget(s, renames);
+  wbXml = wbXml.replace(/<sheet\b[^>]*>/g, (tag) => {
+    const a = attrsOf(tag);
+    if (!renames.has(a.name)) return tag;
+    return tag.replace(/\bname\s*=\s*("[^"]*"|'[^']*')/, `name="${ooxml.encodeAttr(renames.get(a.name))}"`);
+  });
+  wbXml = rewriteTexts(wbXml, /(<definedName\b[^>]*>)([^<]*)(<\/definedName>)/g, retargetAll);
+  zip.file('xl/workbook.xml', wbXml);
+
+  for (const [name, file] of Object.entries(zip.files)) {
+    if (file.dir || !/^xl\/.*\.xml$/.test(name)) continue;
+    let xml = await file.async('string');
+    const before = xml;
+    if (/^xl\/worksheets\//.test(name)) xml = rewriteTexts(xml, /(<f\b[^>]*>)([^<]*)(<\/f>)/g, retargetAll);
+    if (/^xl\/charts\//.test(name)) xml = rewriteTexts(xml, /(<c:f>)([^<]*)(<\/c:f>)/g, retargetAll);
+    if (/^xl\/pivotCache\//.test(name)) {
+      xml = xml.replace(/(<worksheetSource\b[^>]*\bsheet\s*=\s*")([^"]*)(")/g, (w, a, s, b) => {
+        const n = ooxml.decodeXml(s);
+        return renames.has(n) ? `${a}${ooxml.encodeAttr(renames.get(n))}${b}` : w;
+      });
+    }
+    if (xml !== before) zip.file(name, xml);
   }
   return renames;
 }
 
-/** Point `'Old Name'!A1` and `Old!A1` at the renamed sheet. */
-function retarget(formula, renames) {
-  let out = formula;
-  for (const [from, to] of renames) {
-    out = out.split(`'${from.replace(/'/g, "''")}'!`).join(`${quoteSheet(to)}!`);
-    out = out.replace(new RegExp(`(?<![\\w.'])${escRx(from)}!`, 'g'), `${quoteSheet(to)}!`);
-  }
-  return out;
-}
-
-/** Apply the replacement map to everything in the model that holds text. */
-function maskWorkbook(wb, replMap) {
-  const mask = makeMasker(replMap);
-  const renames = renameSheets(wb, mask);
-
-  for (const k of STRING_PROPS(wb.Props)) wb.Props[k] = mask(wb.Props[k]);
-  for (const k of STRING_PROPS(wb.Custprops)) wb.Custprops[k] = mask(wb.Custprops[k]);
-  for (const n of (wb.Workbook && wb.Workbook.Names) || []) {
-    if (n.Ref) n.Ref = mask(retarget(n.Ref, renames));
-  }
-
-  for (const sheetName of wb.SheetNames) {
-    const sheet = wb.Sheets[sheetName];
-    if (!sheet) continue;
-    for (const [addr, cell] of Object.entries(sheet)) {
-      if (addr[0] === '!' || !cell) continue;
-      // Per-cell substring substitution: catches secrets embedded in
-      // narrative text (e.g. "Customer email: alice@example.com -- follow up"),
-      // not just cells whose entire value equals a captured secret.
-      if (cell.v != null) {
-        const original = String(cell.v);
-        const masked = mask(original);
-        if (masked !== original) {
-          cell.v = masked;
-          cell.w = masked;
-          // Force string type so a number-typed cell (e.g. a phone stored as a
-          // numeric value) doesn't render as NaN once a token is written into it.
-          cell.t = 's';
-          // Rich-text and HTML renderings still hold the original.
-          delete cell.r;
-          delete cell.h;
-        }
-      }
-      if (cell.f) cell.f = mask(retarget(cell.f, renames));
-      if (cell.l) {
-        cell.l.Target = mask(cell.l.Target);
-        if (cell.l.Tooltip) cell.l.Tooltip = mask(cell.l.Tooltip);
-        if (cell.l.Rel && cell.l.Rel.Target) cell.l.Rel.Target = mask(cell.l.Rel.Target);
-      }
-      for (const c of cell.c || []) {
-        c.a = mask(c.a);
-        c.t = mask(c.t);
-        delete c.r;
-        delete c.h;
-      }
+/** Mask one worksheet's cells in place. Shared strings are masked separately. */
+function maskSheet(xml, sst, mask) {
+  const edits = [];
+  for (const cell of cellsOf(xml, sst)) {
+    if (cell.type === 's' || cell.type === 'b' || cell.type === 'e' || !cell.text) continue;
+    const masked = mask(cell.text);
+    if (masked === cell.text) continue;
+    let inner;
+    let type;
+    if (cell.type === 'str' || cell.hasFormula) {
+      // A formula's string result.
+      type = 'str';
+      inner = cell.inner.replace(/<v>[^<]*<\/v>/, '').replace(/<is>[\s\S]*?<\/is>/, '') + `<v>${ooxml.encodeXml(masked)}</v>`;
+    } else {
+      // A number, date or inline string becomes an inline string: a token in
+      // a numeric cell would not read back as a number.
+      type = 'inlineStr';
+      inner = cell.inner.replace(/<v>[^<]*<\/v>/, '').replace(/<is>[\s\S]*?<\/is>/, '') + `<is>${tNode(masked)}</is>`;
     }
+    const attrs = `${cell.attrs.replace(/\s+t\s*=\s*("[^"]*"|'[^']*')/, '')} t="${type}"`;
+    edits.push({ start: cell.start, end: cell.end, text: `<c${attrs}>${inner}</c>` });
   }
+  let out = '';
+  let at = 0;
+  for (const e of edits.sort((a, b) => a.start - b.start)) {
+    out += xml.slice(at, e.start) + e.text;
+    at = e.end;
+  }
+  return out + xml.slice(at);
 }
 
 /**
  * Mask a workbook held in memory and return the new file, verified.
- *
- * SheetJS rebuilds the package from its model, so parts it does not model
- * (drawings, charts, pivot caches, connections) are not carried over. What it
- * does write is then run through the same package masker as .docx and .pptx,
- * and the result is checked before it is returned.
- *
  * @param {Buffer} buf
  * @param {object} replMap
- * @param {string} bookType - 'xlsx', 'xlsm', 'biff8', ...
+ * @param {string} [bookType] - 'xlsx' / 'xlsm' keep the package; 'biff8' / 'xlsb' need SheetJS
  * @returns {Promise<Buffer>}
  * @throws {pkg.MaskVerificationError}
  */
 async function maskXlsxBuffer(buf, replMap, bookType = 'xlsx') {
-  const wb = XLSX.read(buf, { type: 'buffer' });
-  maskWorkbook(wb, replMap);
-  const out = XLSX.write(wb, { type: 'buffer', bookType });
+  if (!isZip(buf) || (bookType !== 'xlsx' && bookType !== 'xlsm')) return legacy.maskXlsxBuffer(buf, replMap, bookType);
+  const zip = await JSZip.loadAsync(buf);
+  if (!isOoxmlWorkbook(zip)) return legacy.maskXlsxBuffer(buf, replMap, bookType);
 
-  if (isZip(out)) {
-    const zip = await JSZip.loadAsync(out);
-    await pkg.maskZip(zip, 'xlsx', replMap);
-    return pkg.finishPackage(zip, 'xlsx', replMap);
+  const mask = makeMasker(replMap);
+  // Sheet names first, while formulas still hold the original names.
+  await renameSheets(zip, mask);
+
+  const sstFile = zip.file('xl/sharedStrings.xml');
+  let sst = [];
+  if (sstFile) {
+    const xml = await sstFile.async('string');
+    sst = sharedStrings(xml);
+    let out = '';
+    let at = 0;
+    for (const item of sst) {
+      const masked = mask(item.text);
+      if (masked === item.text) continue;
+      // Rich-text runs and phonetic hints of a masked string still held the original.
+      out += xml.slice(at, item.start) + `<si>${tNode(masked)}</si>`;
+      at = item.end;
+    }
+    if (at > 0) zip.file('xl/sharedStrings.xml', out + xml.slice(at));
+  }
+  for (const sheet of await sheetsOf(zip)) {
+    const file = zip.file(sheet.path);
+    if (!file) continue;
+    const xml = await file.async('string');
+    const out = maskSheet(xml, sst, mask);
+    if (out !== xml) zip.file(sheet.path, out);
   }
 
-  // Legacy binary workbooks cannot be inspected part by part; read the result
-  // back through SheetJS and check what it sees.
+  // Everything else -- comments, formulas, drawings, charts, properties,
+  // embedded files -- as for .docx and .pptx, then the package is verified.
+  await pkg.maskZip(zip, 'xlsx', replMap);
+  const out = await pkg.finishPackage(zip, 'xlsx', replMap);
+
+  // And the cells, read back the way the scanner reads them.
   const { text } = await readXlsxBuffer(out);
-  const left = Object.keys(replMap).filter((k) => k && occurrences(text, k).length > 0);
-  if (left.length > 0) throw new pkg.MaskVerificationError([{ part: 'workbook', count: left.length }]);
+  const left = Object.keys(replMap).filter((k) => k && !String(replMap[k]).includes(k) && occurrences(text, k).length > 0);
+  if (left.length > 0) throw new pkg.MaskVerificationError([{ part: 'workbook cells', count: left.length }]);
   return out;
 }
 
-const BOOK_TYPES = { xlsx: 'xlsx', xlsm: 'xlsm', xlsb: 'xlsb', xls: 'biff8' };
+const BOOK_TYPES = { xlsx: 'xlsx', xlsm: 'xlsm', xltx: 'xlsx', xltm: 'xlsm', xlsb: 'xlsb', xls: 'biff8' };
 
 async function writeXlsx(filePath, outputPath, data, replMap) {
   const ext = path.extname(outputPath).slice(1).toLowerCase();

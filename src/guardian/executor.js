@@ -15,8 +15,8 @@
  *
  * Two deliberate design choices:
  *
- * 1. THE SOURCE IS RE-READ EVERY ITERATION. formats/xlsx.js mutates `data.wb` in
- *    place when it writes, so reusing a `data` object across iterations would
+ * 1. THE SOURCE IS RE-READ EVERY ITERATION. A writer may keep state on the
+ *    `data` object it was given, so reusing one across iterations could
  *    compound transforms and make the artifact depend on history. Re-reading
  *    costs a file read and buys idempotence.
  *
