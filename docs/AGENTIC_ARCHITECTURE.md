@@ -480,7 +480,7 @@ kakashi guard <file> --agent cursor \
 | `-p, --policy` | Policy id (`default` ships) |
 | `-o, --output` | Artifact path (default `guarded_<name>`) |
 | `--approve` | Comma-separated classes a human signs off (e.g. `CREDENTIAL`) |
-| `--max-iterations` | Replan budget before failing closed (default 4) |
+| `--max-iterations` | Replan budget: decimal digits only, integer 1..16 (default 4); invalid values exit 2 before input processing |
 | `--audit-log` / `--no-audit` | JSONL decision log (default `~/.kakashi/guardian-audit.jsonl`) |
 | `--json` | Machine-readable decision — the audit event, which is value-free by construction |
 
