@@ -30,6 +30,59 @@ function runCliTests() {
     }
   }
 
+  const invalidIterations = [
+    '2abc', '2.5', '2.0', '2e3', '0x10', '9007199254740992',
+    '0', '-1', '+2', ' 2', '2 ', '2\n', '', 'NaN', 'Infinity',
+  ];
+  for (const value of invalidIterations) {
+    check(`guard rejects --max-iterations ${JSON.stringify(value)} before file access`, () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kakashi-iterations-'));
+      try {
+        const clean = path.join(dir, 'clean.txt');
+        fs.writeFileSync(clean, 'hello world\n');
+        for (const file of [path.join(dir, 'missing.txt'), clean]) {
+          const r = spawnSync(process.execPath, [
+            CLI, 'guard', file, '--max-iterations', value, '--json',
+            '--output', path.join(dir, 'output.txt'),
+            '--audit-log', path.join(dir, 'audit.jsonl'),
+          ], {
+            encoding: 'utf8', timeout: 10000,
+            env: { ...process.env, HOME: dir, USERPROFILE: dir, TMPDIR: dir, TMP: dir, TEMP: dir },
+          });
+          assert.ifError(r.error);
+          assert.strictEqual(r.status, 2, r.stderr);
+          assert.match(r.stderr, /--max-iterations must be a positive integer/);
+          assert.strictEqual(r.stdout, '');
+          assert.deepStrictEqual(fs.readdirSync(dir), ['clean.txt']);
+          assert.strictEqual(fs.readFileSync(clean, 'utf8'), 'hello world\n');
+        }
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const value of [null, '1', '2', '04', '16']) {
+    check(`guard accepts max-iterations ${value === null ? 'default' : value}`, () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kakashi-iterations-'));
+      try {
+        const clean = path.join(dir, 'clean.txt');
+        fs.writeFileSync(clean, 'hello world\n');
+        const args = ['guard', clean, '--json', '--no-audit'];
+        if (value !== null) args.push('--max-iterations', value);
+        const r = spawnSync(process.execPath, [CLI, ...args], {
+          encoding: 'utf8', timeout: 10000,
+          env: { ...process.env, HOME: dir, USERPROFILE: dir, TMPDIR: dir, TMP: dir, TEMP: dir },
+        });
+        assert.ifError(r.error);
+        assert.strictEqual(r.status, 0, r.stderr);
+        assert.strictEqual(JSON.parse(r.stdout).decision, 'ALLOW');
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
   check('scan exits 1 when findings', () => {
     const r = runCli(['scan', FIXTURE]);
     if (r.status !== 1) throw new Error(`expected exit 1, got ${r.status}`);

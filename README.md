@@ -409,11 +409,16 @@ Options
   -p, --policy <id>         default: default
   -o, --output <path>       artifact path (default: guarded_<file>)
       --approve <classes>   classes a human signs off for release, e.g. CREDENTIAL
-      --max-iterations <n>  replan budget before failing closed (default: 4)
+      --max-iterations <n>  replan budget: decimal integer 1..16 (default: 4)
       --audit-log <path>    append the decision event here
       --no-audit            write no audit event
       --json                machine-readable decision (agent-safe: classes and counts only)
 ```
+
+`--max-iterations` accepts only decimal digits (leading zeroes are allowed).
+Signs, whitespace, fractional/exponent notation, suffixes, zero and unsafe integers
+are rejected with exit 2 before reading the input file or writing an artifact or
+audit event. Guardian's existing upper limit of 16 still applies.
 
 There is also `kakashi agent-guard` — the same engine as a **local privacy daemon** any agent can consult before shipping data.
 

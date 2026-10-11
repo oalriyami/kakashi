@@ -502,19 +502,20 @@ program
   .option('-p, --policy <id>', 'Policy id', 'default')
   .option('-o, --output <path>', 'Artifact path (default: guarded_<file>)')
   .option('--approve <classes>', 'Comma-separated data classes a human approves for release (e.g. CREDENTIAL)')
-  .option('--max-iterations <n>', 'Replan budget before failing closed', '4')
+  .option('--max-iterations <n>', 'Replan budget before failing closed (decimal integer, 1..16)', '4')
   .option('--audit-log <path>', 'Append the decision event here (default: ~/.kakashi/guardian-audit.jsonl)')
   .option('--no-audit', 'Do not write an audit event')
   .option('--json', 'Emit the machine-readable decision instead of the report (agent-safe: classes and counts only)')
   .action(async (file, options) => {
-    const { runGuardian } = require('../src/guardian');
-    const { renderRun } = require('../src/guardian/render');
-
-    const maxIterations = parseInt(options.maxIterations, 10);
-    if (!Number.isInteger(maxIterations) || maxIterations < 1) {
+    const maxIterations = Number(options.maxIterations);
+    if (!/^[0-9]+$/.test(options.maxIterations) || /\s/.test(options.maxIterations)
+        || !Number.isSafeInteger(maxIterations) || maxIterations < 1) {
       console.error(chalk.red('Error: --max-iterations must be a positive integer'));
       process.exit(2);
     }
+
+    const { runGuardian } = require('../src/guardian');
+    const { renderRun } = require('../src/guardian/render');
 
     let result;
     try {
